@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, ApiError } from "../lib/api";
+import { api, ApiError, imageUrl } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import type { Review, Service, Store } from "../types";
 
@@ -106,6 +106,21 @@ function ReviewsSection({ storeId }: { storeId: string }) {
     );
 }
 
+function ContactButtons({ phone }: { phone: string | null }) {
+    if (!phone) return null;
+    const digits = phone.replace(/\D/g, ""); // wa.me necesita solo dígitos, con código de país
+    return (
+        <div className="inline-form">
+            <a className="btn" href={`tel:${phone}`}>
+                Llamar
+            </a>
+            <a className="btn btn-primary" href={`https://wa.me/${digits}`} target="_blank" rel="noreferrer">
+                WhatsApp
+            </a>
+        </div>
+    );
+}
+
 export default function StoreDetail() {
     const { storeId } = useParams<{ storeId: string }>();
     const [store, setStore] = useState<Store | null>(null);
@@ -127,6 +142,7 @@ export default function StoreDetail() {
 
     return (
         <div>
+            {store.logo_url && <img src={imageUrl(store.logo_url)!} alt="" className="store-logo-large" />}
             <h1>{store.name}</h1>
             {store.city && <p className="muted">{store.city}</p>}
             {store.description && <p>{store.description}</p>}
@@ -135,6 +151,7 @@ export default function StoreDetail() {
                     ★ {store.avg_rating?.toFixed(1)} ({store.review_count} reseñas)
                 </p>
             )}
+            <ContactButtons phone={store.phone} />
             <FavoriteButton storeId={store.id} />
 
             <h2>Servicios</h2>
@@ -144,6 +161,9 @@ export default function StoreDetail() {
                 <div className="grid">
                     {services.map((service) => (
                         <Link to={`/servicios/${service.id}`} key={service.id} className="card">
+                            {service.images?.[0] && (
+                                <img src={imageUrl(service.images[0].url)!} alt="" className="service-thumb" />
+                            )}
                             <h3>{service.name}</h3>
                             {service.description && <p>{service.description}</p>}
                             <p className="price">${service.price}</p>

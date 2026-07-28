@@ -12,6 +12,7 @@ export interface Store {
     name: string;
     description: string | null;
     logo_url: string | null;
+    phone: string | null;
     city: string | null;
     timezone: string;
     is_active: boolean;
@@ -38,6 +39,12 @@ export interface Review {
     customer_name?: string;
 }
 
+export interface ProductImage {
+    id: string;
+    url: string;
+    position: number;
+}
+
 export interface Service {
     id: string;
     store_id: string;
@@ -51,6 +58,7 @@ export interface Service {
     capacity: number | null;
     is_active: boolean;
     store_timezone?: string;
+    images?: ProductImage[];
 }
 
 export interface BusinessHour {

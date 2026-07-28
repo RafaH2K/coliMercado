@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, ApiError } from "../lib/api";
+import { api, ApiError, imageUrl } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { formatDateTime, formatTime } from "../lib/format";
 import type { Appointment, Service, Slot } from "../types";
@@ -63,6 +63,13 @@ export default function ServiceDetail() {
 
     return (
         <div>
+            {!!service.images?.length && (
+                <div className="gallery">
+                    {service.images.map((img) => (
+                        <img key={img.id} src={imageUrl(img.url)!} alt="" />
+                    ))}
+                </div>
+            )}
             <h1>{service.name}</h1>
             {service.description && <p>{service.description}</p>}
             <p className="price">

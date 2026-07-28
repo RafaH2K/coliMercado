@@ -14,6 +14,7 @@ CREATE TABLE stores (
     name TEXT NOT NULL,
     description TEXT,
     logo_url TEXT,
+    phone TEXT, -- contacto del negocio (llamada/WhatsApp), independiente del teléfono personal del dueño
     city TEXT, -- texto libre para búsqueda por ubicación; geo real (lat/lng) queda para cuando haya multiciudad de verdad
     timezone TEXT NOT NULL DEFAULT 'America/Mexico_City', -- nombre IANA; da sentido a business_hours/special_dates
     is_active BOOLEAN DEFAULT TRUE,

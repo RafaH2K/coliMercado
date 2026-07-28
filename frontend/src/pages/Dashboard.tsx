@@ -1,6 +1,7 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { api, ApiError } from "../lib/api";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { api, ApiError, imageUrl } from "../lib/api";
 import { formatDateTime } from "../lib/format";
+import { COUNTRIES, joinPhone, splitPhone } from "../lib/countries";
 import type { Appointment, BusinessHour, Service, Store } from "../types";
 
 const DAYS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
@@ -13,6 +14,33 @@ type DayRow = { enabled: boolean; start_time: string; end_time: string };
 
 function emptyWeek(): DayRow[] {
     return DAYS.map(() => ({ enabled: false, start_time: "09:00", end_time: "18:00" }));
+}
+
+// Selector de país (código de marcado) + número local, combinados en un solo
+// teléfono con código de país (lo que WhatsApp necesita para funcionar).
+function PhoneInput({ value, onChange }: { value: string; onChange: (fullPhone: string) => void }) {
+    const parsed = splitPhone(value);
+
+    function update(dial: string, local: string) {
+        onChange(joinPhone(dial, local));
+    }
+
+    return (
+        <div className="inline-form">
+            <select value={parsed.dial} onChange={(e) => update(e.target.value, parsed.local)}>
+                {COUNTRIES.map((c) => (
+                    <option key={c.dial} value={c.dial}>
+                        +{c.dial} {c.name}
+                    </option>
+                ))}
+            </select>
+            <input
+                value={parsed.local}
+                onChange={(e) => update(parsed.dial, e.target.value)}
+                placeholder="312 123 4567"
+            />
+        </div>
+    );
 }
 
 export default function Dashboard() {
@@ -37,6 +65,7 @@ function CreateStore({ onCreated }: { onCreated: (store: Store) => void }) {
     const [name, setName] = useState("");
     const [description, setDescription] = useState("");
     const [city, setCity] = useState("");
+    const [phone, setPhone] = useState("");
     const [timezone, setTimezone] = useState(BROWSER_TIMEZONE);
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
@@ -46,7 +75,7 @@ function CreateStore({ onCreated }: { onCreated: (store: Store) => void }) {
         setLoading(true);
         setError(null);
         try {
-            const store = await api.post<Store>("/stores", { name, description, city, timezone });
+            const store = await api.post<Store>("/stores", { name, description, city, phone, timezone });
             onCreated(store);
         } catch (err) {
             setError(err instanceof ApiError ? err.message : "No se pudo crear el negocio");
@@ -72,6 +101,10 @@ function CreateStore({ onCreated }: { onCreated: (store: Store) => void }) {
                     <input value={city} onChange={(e) => setCity(e.target.value)} placeholder="Colima" />
                 </label>
                 <label className="field">
+                    Teléfono / WhatsApp
+                    <PhoneInput value={phone} onChange={setPhone} />
+                </label>
+                <label className="field">
                     Zona horaria (define tu horario de citas)
                     <select value={timezone} onChange={(e) => setTimezone(e.target.value)}>
                         {TIMEZONES.map((tz) => (
@@ -90,11 +123,60 @@ function CreateStore({ onCreated }: { onCreated: (store: Store) => void }) {
     );
 }
 
-function StorePanel({ store }: { store: Store }) {
+function StorePanel({ store: initialStore }: { store: Store }) {
+    const [store, setStore] = useState(initialStore);
+    const [phone, setPhone] = useState(initialStore.phone ?? "");
+    const [savingPhone, setSavingPhone] = useState(false);
+    const fileInput = useRef<HTMLInputElement>(null);
+    const [uploading, setUploading] = useState(false);
+
+    async function handleLogoChange(e: React.ChangeEvent<HTMLInputElement>) {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setUploading(true);
+        try {
+            const formData = new FormData();
+            formData.append("logo", file);
+            const updated = await api.upload<Store>(`/stores/${store.id}/logo`, formData);
+            setStore(updated);
+        } catch {
+            // deja el logo como estaba si falla
+        } finally {
+            setUploading(false);
+            if (fileInput.current) fileInput.current.value = "";
+        }
+    }
+
+    async function savePhone() {
+        setSavingPhone(true);
+        try {
+            const updated = await api.patch<Store>(`/stores/${store.id}`, { phone });
+            setStore(updated);
+        } catch {
+            // deja el teléfono como estaba si falla
+        } finally {
+            setSavingPhone(false);
+        }
+    }
+
     return (
         <div>
+            {store.logo_url && <img src={imageUrl(store.logo_url)!} alt="" className="store-logo-large" />}
             <h1>{store.name}</h1>
             <p className="muted">Zona horaria: {store.timezone}</p>
+            <label className="field">
+                Logo del negocio
+                <input ref={fileInput} type="file" accept="image/*" onChange={handleLogoChange} disabled={uploading} />
+            </label>
+            <label className="field">
+                Teléfono / WhatsApp
+                <div className="inline-form">
+                    <PhoneInput value={phone} onChange={setPhone} />
+                    <button className="btn btn-primary btn-sm" onClick={savePhone} disabled={savingPhone}>
+                        {savingPhone ? "Guardando..." : "Guardar"}
+                    </button>
+                </div>
+            </label>
             <BusinessHoursEditor storeId={store.id} />
             <ServicesManager storeId={store.id} />
             <AppointmentsManager storeId={store.id} storeTimezone={store.timezone} />
@@ -214,9 +296,7 @@ function ServicesManager({ storeId }: { storeId: string }) {
         <section className="card">
             <h2>Servicios</h2>
             {services?.map((s) => (
-                <div className="service-row" key={s.id}>
-                    <strong>{s.name}</strong> · ${s.price} · {s.duration_minutes} min · capacidad {s.capacity}
-                </div>
+                <ServiceRow key={s.id} service={s} onChanged={load} />
             ))}
 
             <form onSubmit={handleSubmit} className="inline-form">
@@ -232,6 +312,54 @@ function ServicesManager({ storeId }: { storeId: string }) {
             </form>
             {error && <p className="error">{error}</p>}
         </section>
+    );
+}
+
+function ServiceRow({ service, onChanged }: { service: Service; onChanged: () => void }) {
+    const fileInput = useRef<HTMLInputElement>(null);
+    const [uploading, setUploading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setUploading(true);
+        setError(null);
+        try {
+            const formData = new FormData();
+            formData.append("image", file);
+            await api.upload(`/services/${service.id}/images`, formData);
+            onChanged();
+        } catch (err) {
+            setError(err instanceof ApiError ? err.message : "No se pudo subir la imagen");
+        } finally {
+            setUploading(false);
+            if (fileInput.current) fileInput.current.value = "";
+        }
+    }
+
+    async function removeImage(imageId: string) {
+        await api.delete(`/services/${service.id}/images/${imageId}`);
+        onChanged();
+    }
+
+    return (
+        <div className="service-row">
+            <strong>{service.name}</strong> · ${service.price} · {service.duration_minutes} min · capacidad{" "}
+            {service.capacity}
+            <div className="gallery">
+                {service.images?.map((img) => (
+                    <div key={img.id} className="gallery-item">
+                        <img src={imageUrl(img.url)!} alt="" />
+                        <button className="btn btn-ghost btn-sm" onClick={() => removeImage(img.id)}>
+                            Quitar
+                        </button>
+                    </div>
+                ))}
+            </div>
+            <input ref={fileInput} type="file" accept="image/*" onChange={handleFileChange} disabled={uploading} />
+            {error && <p className="error">{error}</p>}
+        </div>
     );
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, ApiError } from "../lib/api";
+import { api, ApiError, imageUrl } from "../lib/api";
 import type { Category, Store } from "../types";
 
 function Rating({ avg, count }: { avg?: number; count?: number }) {
@@ -69,6 +69,9 @@ export default function Stores() {
                 <div className="grid">
                     {stores.map((store) => (
                         <Link to={`/negocios/${store.id}`} key={store.id} className="card store-card">
+                            {store.logo_url && (
+                                <img src={imageUrl(store.logo_url)!} alt="" className="store-logo" />
+                            )}
                             <h2>{store.name}</h2>
                             {store.city && <p className="muted">{store.city}</p>}
                             {store.description && <p>{store.description}</p>}

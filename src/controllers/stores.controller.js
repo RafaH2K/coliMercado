@@ -1,8 +1,11 @@
+const path = require("path");
+const { unlink } = require("fs/promises");
 const pool = require("../config/db");
 const { isValidTimeZone } = require("../lib/timezone");
+const { UPLOAD_DIR } = require("../config/upload");
 
 async function create(req, res) {
-    const { name, description, logo_url, timezone, city } = req.body;
+    const { name, description, logo_url, timezone, city, phone } = req.body;
     if (!name || !name.trim()) {
         return res.status(400).json({ error: "El nombre del negocio es requerido" });
     }
@@ -11,9 +14,17 @@ async function create(req, res) {
     }
     try {
         const { rows } = await pool.query(
-            `INSERT INTO stores (owner_id, name, description, logo_url, timezone, city)
-             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-            [req.user.id, name, description || null, logo_url || null, timezone || "America/Mexico_City", city || null]
+            `INSERT INTO stores (owner_id, name, description, logo_url, timezone, city, phone)
+             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+            [
+                req.user.id,
+                name,
+                description || null,
+                logo_url || null,
+                timezone || "America/Mexico_City",
+                city || null,
+                phone || null,
+            ]
         );
         res.status(201).json(rows[0]);
     } catch (err) {
@@ -85,7 +96,7 @@ async function getById(req, res) {
 }
 
 async function update(req, res) {
-    const { name, description, logo_url, is_active, timezone, city } = req.body;
+    const { name, description, logo_url, is_active, timezone, city, phone } = req.body;
     if (timezone && !isValidTimeZone(timezone)) {
         return res.status(400).json({ error: "timezone debe ser una zona IANA válida (ej. America/Mexico_City)" });
     }
@@ -97,10 +108,11 @@ async function update(req, res) {
                 logo_url = COALESCE($3, logo_url),
                 is_active = COALESCE($4, is_active),
                 timezone = COALESCE($5, timezone),
-                city = COALESCE($6, city)
-             WHERE id = $7
+                city = COALESCE($6, city),
+                phone = COALESCE($7, phone)
+             WHERE id = $8
              RETURNING *`,
-            [name, description, logo_url, is_active, timezone, city, req.store.id]
+            [name, description, logo_url, is_active, timezone, city, phone, req.store.id]
         );
         res.json(rows[0]);
     } catch (err) {
@@ -109,4 +121,23 @@ async function update(req, res) {
     }
 }
 
-module.exports = { create, mine, list, getById, update };
+async function uploadLogo(req, res) {
+    const url = `/uploads/${req.file.filename}`;
+    try {
+        const { rows: prevRows } = await pool.query(`SELECT logo_url FROM stores WHERE id = $1`, [req.store.id]);
+        const { rows } = await pool.query(`UPDATE stores SET logo_url = $1 WHERE id = $2 RETURNING *`, [
+            url,
+            req.store.id,
+        ]);
+        const oldUrl = prevRows[0]?.logo_url;
+        if (oldUrl && oldUrl.startsWith("/uploads/")) {
+            unlink(path.join(UPLOAD_DIR, path.basename(oldUrl))).catch(() => {});
+        }
+        res.json(rows[0]);
+    } catch (err) {
+        console.error("stores.uploadLogo error:", err.message);
+        res.status(500).json({ error: "Error interno del servidor" });
+    }
+}
+
+module.exports = { create, mine, list, getById, update, uploadLogo };

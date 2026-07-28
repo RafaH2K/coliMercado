@@ -2,6 +2,15 @@ const pool = require("../config/db");
 const { generateCandidateSlots, filterAvailable } = require("../lib/availability");
 const { zonedTimeToUtc, addDays } = require("../lib/timezone");
 
+// Reutilizado por listForStore/getById: agrega las fotos de cada servicio como JSON.
+const IMAGES_SUBQUERY = `
+    COALESCE(
+        (SELECT json_agg(json_build_object('id', pi.id, 'url', pi.url, 'position', pi.position) ORDER BY pi.position)
+         FROM product_images pi WHERE pi.product_id = p.id),
+        '[]'
+    ) AS images
+`;
+
 async function search(req, res) {
     const { q, category_id, city } = req.query;
     try {
@@ -26,8 +35,10 @@ async function search(req, res) {
 async function listForStore(req, res) {
     try {
         const { rows } = await pool.query(
-            `SELECT * FROM products WHERE store_id = $1 AND type = 'service' AND is_active = TRUE
-             ORDER BY created_at DESC`,
+            `SELECT p.*, ${IMAGES_SUBQUERY}
+             FROM products p
+             WHERE p.store_id = $1 AND p.type = 'service' AND p.is_active = TRUE
+             ORDER BY p.created_at DESC`,
             [req.params.storeId]
         );
         res.json(rows);
@@ -75,7 +86,7 @@ async function create(req, res) {
 async function getById(req, res) {
     try {
         const { rows } = await pool.query(
-            `SELECT p.*, s.timezone AS store_timezone
+            `SELECT p.*, s.timezone AS store_timezone, ${IMAGES_SUBQUERY}
              FROM products p JOIN stores s ON s.id = p.store_id
              WHERE p.id = $1 AND p.type = 'service'`,
             [req.params.id]
