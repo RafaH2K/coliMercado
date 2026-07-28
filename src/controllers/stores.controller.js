@@ -1,0 +1,112 @@
+const pool = require("../config/db");
+const { isValidTimeZone } = require("../lib/timezone");
+
+async function create(req, res) {
+    const { name, description, logo_url, timezone, city } = req.body;
+    if (!name || !name.trim()) {
+        return res.status(400).json({ error: "El nombre del negocio es requerido" });
+    }
+    if (timezone && !isValidTimeZone(timezone)) {
+        return res.status(400).json({ error: "timezone debe ser una zona IANA válida (ej. America/Mexico_City)" });
+    }
+    try {
+        const { rows } = await pool.query(
+            `INSERT INTO stores (owner_id, name, description, logo_url, timezone, city)
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+            [req.user.id, name, description || null, logo_url || null, timezone || "America/Mexico_City", city || null]
+        );
+        res.status(201).json(rows[0]);
+    } catch (err) {
+        console.error("stores.create error:", err.message);
+        res.status(500).json({ error: "Error interno del servidor" });
+    }
+}
+
+async function mine(req, res) {
+    try {
+        const { rows } = await pool.query(
+            `SELECT * FROM stores WHERE owner_id = $1 ORDER BY created_at DESC`,
+            [req.user.id]
+        );
+        res.json(rows);
+    } catch (err) {
+        console.error("stores.mine error:", err.message);
+        res.status(500).json({ error: "Error interno del servidor" });
+    }
+}
+
+// Subconsulta reutilizada por list/getById para no repetir el promedio de rating.
+const RATING_JOIN = `
+    LEFT JOIN (
+        SELECT store_id, AVG(rating)::float AS avg_rating, COUNT(*)::int AS review_count
+        FROM reviews GROUP BY store_id
+    ) r ON r.store_id = s.id
+`;
+
+async function list(req, res) {
+    const { q, category_id, city } = req.query;
+    try {
+        const { rows } = await pool.query(
+            `SELECT s.*, COALESCE(r.avg_rating, 0) AS avg_rating, COALESCE(r.review_count, 0) AS review_count
+             FROM stores s
+             ${RATING_JOIN}
+             WHERE s.is_active = TRUE
+               AND ($1::text IS NULL OR s.name ILIKE '%' || $1 || '%' OR s.description ILIKE '%' || $1 || '%')
+               AND ($2::uuid IS NULL OR EXISTS (
+                   SELECT 1 FROM products p WHERE p.store_id = s.id AND p.category_id = $2 AND p.is_active = TRUE
+               ))
+               AND ($3::text IS NULL OR s.city ILIKE '%' || $3 || '%')
+             ORDER BY s.created_at DESC
+             LIMIT 50`,
+            [q || null, category_id || null, city || null]
+        );
+        res.json(rows);
+    } catch (err) {
+        console.error("stores.list error:", err.message);
+        res.status(500).json({ error: "Error interno del servidor" });
+    }
+}
+
+async function getById(req, res) {
+    try {
+        const { rows } = await pool.query(
+            `SELECT s.*, COALESCE(r.avg_rating, 0) AS avg_rating, COALESCE(r.review_count, 0) AS review_count
+             FROM stores s
+             ${RATING_JOIN}
+             WHERE s.id = $1`,
+            [req.params.storeId]
+        );
+        if (!rows[0]) return res.status(404).json({ error: "Negocio no encontrado" });
+        res.json(rows[0]);
+    } catch (err) {
+        console.error("stores.getById error:", err.message);
+        res.status(500).json({ error: "Error interno del servidor" });
+    }
+}
+
+async function update(req, res) {
+    const { name, description, logo_url, is_active, timezone, city } = req.body;
+    if (timezone && !isValidTimeZone(timezone)) {
+        return res.status(400).json({ error: "timezone debe ser una zona IANA válida (ej. America/Mexico_City)" });
+    }
+    try {
+        const { rows } = await pool.query(
+            `UPDATE stores SET
+                name = COALESCE($1, name),
+                description = COALESCE($2, description),
+                logo_url = COALESCE($3, logo_url),
+                is_active = COALESCE($4, is_active),
+                timezone = COALESCE($5, timezone),
+                city = COALESCE($6, city)
+             WHERE id = $7
+             RETURNING *`,
+            [name, description, logo_url, is_active, timezone, city, req.store.id]
+        );
+        res.json(rows[0]);
+    } catch (err) {
+        console.error("stores.update error:", err.message);
+        res.status(500).json({ error: "Error interno del servidor" });
+    }
+}
+
+module.exports = { create, mine, list, getById, update };
