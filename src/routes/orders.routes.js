@@ -2,6 +2,7 @@ const { Router } = require("express");
 const rateLimit = require("express-rate-limit");
 const requireAuth = require("../middlewares/auth");
 const orders = require("../controllers/orders.controller");
+const messages = require("../controllers/messages.controller");
 
 const router = Router();
 
@@ -20,5 +21,7 @@ router.post("/checkout-session", checkoutLimiter, orders.createCheckoutSession);
 router.post("/confirm", checkoutLimiter, orders.confirmStripeSession);
 router.get("/me", orders.listMine);
 router.patch("/:id/status", orders.updateStatus);
+router.get("/:id/messages", messages.listForOrder);
+router.post("/:id/messages", messages.createForOrder);
 
 module.exports = router;

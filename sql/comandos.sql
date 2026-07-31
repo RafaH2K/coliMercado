@@ -250,3 +250,29 @@ CREATE TABLE reviews (
 
 CREATE INDEX idx_reviews_store ON reviews(store_id);
 
+
+-- ============================================================
+-- Chat entre cliente y negocio, por pedido o por cita
+-- ============================================================
+
+-- Un mensaje pertenece a un pedido O a una cita, nunca a ambos ni a ninguno
+-- (hilo por transacción, como el chat de Didi con tu repartidor: se acaba
+-- el pedido/cita, se acaba de qué hablar ahí). sender_id es quien escribió
+-- —cliente o dueño del negocio—, no se duplica aquí a qué tienda/cliente
+-- pertenece: eso se deriva por join desde orders/appointments.
+CREATE TABLE messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    order_id UUID REFERENCES orders(id) ON DELETE CASCADE,
+    appointment_id UUID REFERENCES appointments(id) ON DELETE CASCADE,
+    sender_id UUID REFERENCES users(id) NOT NULL,
+    body TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    CHECK (
+        (order_id IS NOT NULL AND appointment_id IS NULL) OR
+        (order_id IS NULL AND appointment_id IS NOT NULL)
+    )
+);
+
+CREATE INDEX idx_messages_order ON messages(order_id, created_at);
+CREATE INDEX idx_messages_appointment ON messages(appointment_id, created_at);
+
