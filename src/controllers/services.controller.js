@@ -11,8 +11,11 @@ const IMAGES_SUBQUERY = `
     ) AS images
 `;
 
+const PAGE_SIZE = 24;
+
 async function search(req, res) {
-    const { q, category_id, city } = req.query;
+    const { q, category_id, city, page } = req.query;
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
     try {
         const { rows } = await pool.query(
             `SELECT p.*, s.name AS store_name, s.city AS store_city, s.timezone AS store_timezone, ${IMAGES_SUBQUERY}
@@ -22,8 +25,8 @@ async function search(req, res) {
                AND ($2::uuid IS NULL OR p.category_id = $2)
                AND ($3::text IS NULL OR s.city ILIKE '%' || $3 || '%')
              ORDER BY p.created_at DESC
-             LIMIT 50`,
-            [q || null, category_id || null, city || null]
+             LIMIT $4 OFFSET $5`,
+            [q || null, category_id || null, city || null, PAGE_SIZE, (pageNum - 1) * PAGE_SIZE]
         );
         res.json(rows);
     } catch (err) {

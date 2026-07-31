@@ -490,6 +490,8 @@ input[type="checkbox"] { width: auto; margin: 0; accent-color: var(--accent); }
 .page-header { margin-bottom: 8px; }
 .page-header p { color: var(--text); font-size: 15px; max-width: 60ch; }
 
+.load-more { display: flex; justify-content: center; margin-top: 24px; }
+
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }

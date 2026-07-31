@@ -1,13 +1,23 @@
 const { Router } = require("express");
+const rateLimit = require("express-rate-limit");
 const requireAuth = require("../middlewares/auth");
 const orders = require("../controllers/orders.controller");
 
 const router = Router();
 
+// Limita intentos de checkout/pago: cada uno mueve dinero o llama a la API
+// de Stripe, así que no deben poder martillarse igual que un GET cualquiera.
+const checkoutLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
 router.use(requireAuth);
-router.post("/", orders.checkout);
-router.post("/checkout-session", orders.createCheckoutSession);
-router.post("/confirm", orders.confirmStripeSession);
+router.post("/", checkoutLimiter, orders.checkout);
+router.post("/checkout-session", checkoutLimiter, orders.createCheckoutSession);
+router.post("/confirm", checkoutLimiter, orders.confirmStripeSession);
 router.get("/me", orders.listMine);
 router.patch("/:id/status", orders.updateStatus);
 

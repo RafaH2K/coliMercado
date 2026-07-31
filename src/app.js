@@ -12,14 +12,21 @@ const categoriesRoutes = require("./routes/categories.routes");
 const favoritesRoutes = require("./routes/favorites.routes");
 const cartRoutes = require("./routes/cart.routes");
 const ordersRoutes = require("./routes/orders.routes");
+const { handleStripeWebhook } = require("./controllers/orders.controller");
 const { UPLOAD_DIR } = require("./config/upload");
 
 const app = express();
 
 app.use(helmet());
 app.use(cors({ origin: process.env.CORS_ORIGIN, credentials: true }));
-app.use(express.json());
 app.use(morgan("dev"));
+
+// Stripe firma el cuerpo crudo de la petición para verificar que el webhook
+// viene realmente de Stripe, así que esta ruta debe montarse ANTES de
+// express.json() (que reemplazaría el body crudo por el objeto parseado).
+app.post("/api/webhooks/stripe", express.raw({ type: "application/json" }), handleStripeWebhook);
+
+app.use(express.json());
 
 // helmet pone Cross-Origin-Resource-Policy: same-origin por default, lo que
 // bloquea que el frontend (otro puerto = otro origen) cargue estas imágenes

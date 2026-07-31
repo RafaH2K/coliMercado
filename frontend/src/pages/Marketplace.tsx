@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { MapPin } from "@phosphor-icons/react";
-import { api, ApiError, imageUrl } from "../lib/api";
+import { api, imageUrl } from "../lib/api";
 import { useDebouncedFilters } from "../lib/useDebouncedFilters";
+import { usePaginatedList } from "../lib/usePaginatedList";
 import { SearchFilters } from "../components/SearchFilters";
 import type { Category, Product } from "../types";
 
@@ -30,21 +31,22 @@ function groupByStore(products: Product[]): StoreGroup[] {
 }
 
 export default function Marketplace() {
-    const [products, setProducts] = useState<Product[] | null>(null);
     const [categories, setCategories] = useState<Category[]>([]);
-    const [error, setError] = useState<string | null>(null);
     const filters = useDebouncedFilters();
+    const {
+        items: products,
+        error,
+        hasMore,
+        loadingMore,
+        loadMore,
+    } = usePaginatedList<Product>(
+        (page) => api.get(`/products?page=${page}${filters.qs ? `&${filters.qs}` : ""}`),
+        [filters.qs]
+    );
 
     useEffect(() => {
         api.get<Category[]>("/categories?kind=product").then(setCategories).catch(() => {});
     }, []);
-
-    useEffect(() => {
-        api
-            .get<Product[]>(`/products${filters.qs ? `?${filters.qs}` : ""}`)
-            .then(setProducts)
-            .catch((err) => setError(err instanceof ApiError ? err.message : "No se pudieron cargar los productos"));
-    }, [filters.qs]);
 
     const stores = products ? groupByStore(products) : null;
 
@@ -80,6 +82,13 @@ export default function Marketplace() {
                             </Link>
                         );
                     })}
+                </div>
+            )}
+            {hasMore && (
+                <div className="load-more">
+                    <button className="btn" onClick={loadMore} disabled={loadingMore}>
+                        {loadingMore ? "Cargando..." : "Cargar más"}
+                    </button>
                 </div>
             )}
         </div>

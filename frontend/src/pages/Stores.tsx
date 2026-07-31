@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Clock, Star, MapPin } from "@phosphor-icons/react";
 import { api, ApiError, imageUrl } from "../lib/api";
 import { useDebouncedFilters } from "../lib/useDebouncedFilters";
+import { usePaginatedList } from "../lib/usePaginatedList";
 import { SearchFilters } from "../components/SearchFilters";
 import type { Category, Service, Store } from "../types";
 
@@ -20,29 +21,40 @@ type View = "negocios" | "servicios";
 
 export default function Stores() {
     const [view, setView] = useState<View>("negocios");
-    const [stores, setStores] = useState<Store[] | null>(null);
-    const [services, setServices] = useState<Service[] | null>(null);
     const [categories, setCategories] = useState<Category[]>([]);
-    const [error, setError] = useState<string | null>(null);
     const filters = useDebouncedFilters();
+
+    const {
+        items: stores,
+        error: storesError,
+        hasMore: storesHasMore,
+        loadingMore: storesLoadingMore,
+        loadMore: loadMoreStores,
+    } = usePaginatedList<Store>(
+        (page) =>
+            view === "negocios"
+                ? api.get(`/stores?page=${page}${filters.qs ? `&${filters.qs}` : ""}`)
+                : Promise.resolve([]),
+        [view, filters.qs]
+    );
+    const {
+        items: services,
+        error: servicesError,
+        hasMore: servicesHasMore,
+        loadingMore: servicesLoadingMore,
+        loadMore: loadMoreServices,
+    } = usePaginatedList<Service>(
+        (page) =>
+            view === "servicios"
+                ? api.get(`/services?page=${page}${filters.qs ? `&${filters.qs}` : ""}`)
+                : Promise.resolve([]),
+        [view, filters.qs]
+    );
+    const error = view === "negocios" ? storesError : servicesError;
 
     useEffect(() => {
         api.get<Category[]>("/categories?kind=service").then(setCategories).catch(() => {});
     }, []);
-
-    useEffect(() => {
-        if (view === "negocios") {
-            api
-                .get<Store[]>(`/stores${filters.qs ? `?${filters.qs}` : ""}`)
-                .then(setStores)
-                .catch((err) => setError(err instanceof ApiError ? err.message : "No se pudieron cargar los negocios"));
-        } else {
-            api
-                .get<Service[]>(`/services${filters.qs ? `?${filters.qs}` : ""}`)
-                .then(setServices)
-                .catch((err) => setError(err instanceof ApiError ? err.message : "No se pudieron cargar los servicios"));
-        }
-    }, [view, filters.qs]);
 
     return (
         <div>
@@ -121,6 +133,21 @@ export default function Stores() {
                             </p>
                         </Link>
                     ))}
+                </div>
+            )}
+
+            {view === "negocios" && storesHasMore && (
+                <div className="load-more">
+                    <button className="btn" onClick={loadMoreStores} disabled={storesLoadingMore}>
+                        {storesLoadingMore ? "Cargando..." : "Cargar más"}
+                    </button>
+                </div>
+            )}
+            {view === "servicios" && servicesHasMore && (
+                <div className="load-more">
+                    <button className="btn" onClick={loadMoreServices} disabled={servicesLoadingMore}>
+                        {servicesLoadingMore ? "Cargando..." : "Cargar más"}
+                    </button>
                 </div>
             )}
         </div>

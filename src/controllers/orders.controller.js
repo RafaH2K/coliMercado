@@ -151,66 +151,112 @@ async function createCheckoutSession(req, res) {
     }
 }
 
-// El frontend llama esto desde la página de éxito tras volver de Stripe. Se
-// verifica el pago directamente contra la API de Stripe (nunca se confía en
-// el estado que trae la URL) antes de generar los pedidos.
-// ponytail: confirmación por polling desde el cliente en vez de un webhook;
-// si el usuario cierra la pestaña antes de volver, el pedido no se crea.
-// Subir a un webhook de Stripe (checkout.session.completed) si eso importa.
+// Núcleo compartido entre la confirmación que dispara el navegador (rápida,
+// pero se pierde si el cliente cierra la pestaña antes de volver) y el
+// webhook de Stripe (más lento, pero siempre llega). Cualquiera de los dos
+// que llegue primero genera los pedidos; el otro es un no-op gracias a la
+// unicidad de stripe_session_id.
+async function fulfillStripeSession(session) {
+    const { rows: existingPayment } = await pool.query(
+        `SELECT order_id FROM payments WHERE stripe_session_id = $1`,
+        [session.id]
+    );
+    if (existingPayment.length > 0) {
+        return { orders: await fetchOrdersByIds(existingPayment.map((p) => p.order_id)), created: false };
+    }
+    if (session.payment_status !== "paid") {
+        throw new CheckoutError(402, "El pago no se ha completado");
+    }
+    const userId = session.metadata?.user_id;
+    if (!userId) throw new CheckoutError(400, "La sesión de pago no tiene un usuario asociado");
+
+    try {
+        const created = await placeOrders(userId, { provider: "stripe", status: "pagado", stripeSessionId: session.id });
+        return { orders: await fetchOrdersByIds(created.map((o) => o.id)), created: true };
+    } catch (err) {
+        // 23505 = unique_violation: otra llamada concurrente (el navegador y el
+        // webhook casi al mismo tiempo) ya insertó el pago primero.
+        if (err.code === "23505") {
+            const { rows: existing } = await pool.query(
+                `SELECT order_id FROM payments WHERE stripe_session_id = $1`,
+                [session.id]
+            );
+            return { orders: await fetchOrdersByIds(existing.map((p) => p.order_id)), created: false };
+        }
+        if (err instanceof CheckoutError) {
+            // Ya se pagó de verdad en Stripe (session.payment_status === "paid").
+            // Si el pedido no se puede generar (ej. se agotó el inventario en el
+            // intervalo entre pagar y confirmar), hay que devolver el dinero:
+            // quedarnos con el cobro sin entregar nada no es aceptable.
+            try {
+                if (session.payment_intent) {
+                    await stripe.refunds.create({ payment_intent: session.payment_intent });
+                }
+            } catch (refundErr) {
+                console.error("orders.fulfillStripeSession refund error:", refundErr.message);
+            }
+            err.message = `${err.message}. Tu pago fue reembolsado automáticamente.`;
+        }
+        throw err;
+    }
+}
+
+// El frontend llama esto desde la página de éxito tras volver de Stripe, para
+// mostrar el pedido al instante. El webhook (ver handleStripeWebhook) es la
+// vía confiable que igual genera el pedido si el usuario nunca vuelve.
 async function confirmStripeSession(req, res) {
     const { session_id } = req.body;
     if (!session_id) return res.status(400).json({ error: "session_id es requerido" });
     try {
+        // Atajo barato: si ya se procesó (por este mismo endpoint antes, o por
+        // el webhook mientras tanto), no hace falta ni llamar a Stripe de nuevo.
         const { rows: existingPayment } = await pool.query(
-            `SELECT order_id FROM payments WHERE stripe_session_id = $1`,
+            `SELECT o.id AS order_id, o.user_id FROM payments p JOIN orders o ON o.id = p.order_id WHERE p.stripe_session_id = $1`,
             [session_id]
         );
         if (existingPayment.length > 0) {
-            return res.json(await fetchOrdersByIds(existingPayment.map((p) => p.order_id)));
+            if (existingPayment[0].user_id !== req.user.id) {
+                return res.status(403).json({ error: "Esta sesión de pago no te pertenece" });
+            }
+            return res.status(200).json(await fetchOrdersByIds(existingPayment.map((p) => p.order_id)));
         }
 
         const session = await stripe.checkout.sessions.retrieve(session_id);
-        if (session.payment_status !== "paid") {
-            return res.status(402).json({ error: "El pago no se ha completado" });
-        }
         if (session.metadata?.user_id !== req.user.id) {
             return res.status(403).json({ error: "Esta sesión de pago no te pertenece" });
         }
-
-        const created = await placeOrders(req.user.id, {
-            provider: "stripe",
-            status: "pagado",
-            stripeSessionId: session.id,
-        });
-        res.status(201).json(await fetchOrdersByIds(created.map((o) => o.id)));
+        const { orders, created } = await fulfillStripeSession(session);
+        res.status(created ? 201 : 200).json(orders);
     } catch (err) {
-        if (err instanceof CheckoutError) {
-            // El cliente ya pagó de verdad en Stripe (session.payment_status === "paid")
-            // antes de llegar aquí. Si el pedido no se puede generar (ej. se agotó el
-            // inventario en el intervalo entre pagar y confirmar), hay que devolver el
-            // dinero: quedarnos con el cobro sin entregar nada no es aceptable.
-            try {
-                const failedSession = await stripe.checkout.sessions.retrieve(session_id);
-                if (failedSession.payment_intent) {
-                    await stripe.refunds.create({ payment_intent: failedSession.payment_intent });
-                }
-            } catch (refundErr) {
-                console.error("orders.confirmStripeSession refund error:", refundErr.message);
-            }
-            return res.status(err.status).json({ error: `${err.message}. Tu pago fue reembolsado automáticamente.` });
-        }
-        // 23505 = unique_violation: otra petición concurrente para la misma
-        // sesión (doble llamada del cliente) ya insertó el pago primero.
-        if (err.code === "23505") {
-            const { rows: existingPayment } = await pool.query(
-                `SELECT order_id FROM payments WHERE stripe_session_id = $1`,
-                [session_id]
-            );
-            return res.status(200).json(await fetchOrdersByIds(existingPayment.map((p) => p.order_id)));
-        }
+        if (err instanceof CheckoutError) return res.status(err.status).json({ error: err.message });
         console.error("orders.confirmStripeSession error:", err.message);
         res.status(500).json({ error: "Error interno del servidor" });
     }
+}
+
+// Fuente de verdad de los pagos: Stripe llama aquí server-to-server, así que
+// el pedido se genera aunque el cliente nunca vuelva a /carrito/exito. Monta
+// con express.raw() en app.js (antes de express.json()), Stripe firma el
+// cuerpo crudo para verificar que la llamada viene realmente de Stripe.
+async function handleStripeWebhook(req, res) {
+    let event;
+    try {
+        event = stripe.webhooks.constructEvent(req.body, req.headers["stripe-signature"], process.env.STRIPE_WEBHOOK_SECRET);
+    } catch (err) {
+        console.error("stripe webhook: firma inválida:", err.message);
+        return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    if (event.type === "checkout.session.completed") {
+        try {
+            await fulfillStripeSession(event.data.object);
+        } catch (err) {
+            // Ya se hizo lo posible (incl. el reembolso si aplicaba); solo se
+            // deja registro. Si Stripe no recibe 2xx, reintentará el webhook.
+            console.error("stripe webhook: fulfillment error:", err.message);
+        }
+    }
+    res.json({ received: true });
 }
 
 async function listMine(req, res) {
@@ -277,6 +323,7 @@ module.exports = {
     checkout,
     createCheckoutSession,
     confirmStripeSession,
+    handleStripeWebhook,
     listMine,
     listForStore,
     updateStatus,

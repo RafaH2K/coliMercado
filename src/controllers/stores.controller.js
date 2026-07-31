@@ -54,8 +54,11 @@ const RATING_JOIN = `
     ) r ON r.store_id = s.id
 `;
 
+const PAGE_SIZE = 24;
+
 async function list(req, res) {
-    const { q, category_id, city } = req.query;
+    const { q, category_id, city, page } = req.query;
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
     try {
         const { rows } = await pool.query(
             `SELECT s.*, COALESCE(r.avg_rating, 0) AS avg_rating, COALESCE(r.review_count, 0) AS review_count
@@ -68,8 +71,8 @@ async function list(req, res) {
                ))
                AND ($3::text IS NULL OR s.city ILIKE '%' || $3 || '%')
              ORDER BY s.created_at DESC
-             LIMIT 50`,
-            [q || null, category_id || null, city || null]
+             LIMIT $4 OFFSET $5`,
+            [q || null, category_id || null, city || null, PAGE_SIZE, (pageNum - 1) * PAGE_SIZE]
         );
         res.json(rows);
     } catch (err) {
