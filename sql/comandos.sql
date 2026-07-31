@@ -14,6 +14,28 @@ CREATE TABLE users (
 );
 
 
+-- Catálogo de planes de suscripción. Tabla aparte (en vez de columnas sueltas
+-- en stores) porque precio y límites son configuración compartida entre
+-- negocios, no un dato propio de cada uno: cambiar el precio del Pro no debe
+-- significar un UPDATE fila por fila.
+CREATE TABLE plans (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code TEXT UNIQUE NOT NULL CHECK (code IN ('free', 'basico', 'pro')),
+    name TEXT NOT NULL,
+    price_mxn NUMERIC(10,2) NOT NULL DEFAULT 0,
+    max_products INT, -- tope de productos/servicios activos; NULL = ilimitado
+    whatsapp_daily_summary BOOLEAN NOT NULL DEFAULT FALSE, -- resumen diario de citas/reservaciones
+    whatsapp_summary_mode_choice BOOLEAN NOT NULL DEFAULT FALSE, -- puede elegir 'noche_anterior' además de 'mismo_dia' (solo Pro)
+    whatsapp_cancellation_alerts BOOLEAN NOT NULL DEFAULT FALSE, -- aviso inmediato por cancelación (solo Pro)
+    featured_placement BOOLEAN NOT NULL DEFAULT FALSE -- prioridad en resultados y home (solo Pro)
+);
+
+INSERT INTO plans (code, name, price_mxn, max_products, whatsapp_daily_summary, whatsapp_summary_mode_choice, whatsapp_cancellation_alerts, featured_placement) VALUES
+    ('free',   'Free',    0,   5,    FALSE, FALSE, FALSE, FALSE),
+    ('basico', 'Básico',  150, 20,   TRUE,  FALSE, FALSE, FALSE),
+    ('pro',    'Pro',     300, NULL, TRUE,  TRUE,  TRUE,  TRUE);
+
+
 CREATE TABLE stores (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     owner_id UUID REFERENCES users(id),
@@ -31,6 +53,15 @@ CREATE TABLE stores (
     is_active BOOLEAN DEFAULT TRUE,
     is_admin_approved BOOLEAN NOT NULL DEFAULT FALSE,
     page_views INT NOT NULL DEFAULT 0, -- contador simple, incrementado en cada GET /stores/:id público
+    -- NULL = todavía no eligió plan; la app lo trata como 'free' en ese caso.
+    plan_id UUID REFERENCES plans(id),
+    -- Hora a la que se envía el resumen diario de citas/reservaciones por
+    -- WhatsApp (Básico y Pro). NULL = el dueño no la ha configurado aún.
+    whatsapp_summary_time TIME,
+    -- 'mismo_dia' = resumen al iniciar el día (única opción en Básico).
+    -- 'noche_anterior' solo disponible en Pro, para planificarse un día antes.
+    whatsapp_summary_mode TEXT NOT NULL DEFAULT 'mismo_dia'
+        CHECK (whatsapp_summary_mode IN ('mismo_dia', 'noche_anterior')),
     created_at TIMESTAMP DEFAULT NOW()
 );
 

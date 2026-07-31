@@ -1,7 +1,7 @@
 const test = require("node:test");
 const { after } = test;
 const assert = require("node:assert/strict");
-const { pool, createUser, cleanup, mockRes } = require("./fixtures");
+const { pool, createUser, createStore, cleanup, mockRes } = require("./fixtures");
 const stores = require("../src/controllers/stores.controller");
 
 test("create: un negocio nuevo nace pendiente de aprobación", async (t) => {
@@ -57,6 +57,39 @@ test("getById: un negocio pendiente responde 404 públicamente", async (t) => {
     const res = mockRes();
     await stores.getById({ params: { storeId } }, res);
     assert.equal(res.statusCode, 404);
+});
+
+test("setPlan: asigna el plan_id correspondiente al code recibido", async (t) => {
+    const userId = await createUser();
+    const storeId = await createStore(userId);
+    t.after(() => cleanup({ userId, storeId }));
+
+    const res = mockRes();
+    await stores.setPlan({ store: { id: storeId }, body: { plan_code: "pro" } }, res);
+
+    assert.equal(res.body.id, storeId);
+    const { rows } = await pool.query(
+        `SELECT pl.code FROM stores s JOIN plans pl ON pl.id = s.plan_id WHERE s.id = $1`,
+        [storeId]
+    );
+    assert.equal(rows[0].code, "pro");
+});
+
+test("setPlan: rechaza un plan_code inexistente sin tocar el plan actual", async (t) => {
+    const userId = await createUser();
+    const storeId = await createStore(userId);
+    t.after(() => cleanup({ userId, storeId }));
+
+    await stores.setPlan({ store: { id: storeId }, body: { plan_code: "basico" } }, mockRes());
+    const res = mockRes();
+    await stores.setPlan({ store: { id: storeId }, body: { plan_code: "no_existe" } }, res);
+
+    assert.equal(res.statusCode, 400);
+    const { rows } = await pool.query(
+        `SELECT pl.code FROM stores s JOIN plans pl ON pl.id = s.plan_id WHERE s.id = $1`,
+        [storeId]
+    );
+    assert.equal(rows[0].code, "basico", "el plan actual no debió cambiar");
 });
 
 after(() => pool.end());

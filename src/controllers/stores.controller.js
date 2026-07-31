@@ -175,6 +175,29 @@ async function update(req, res) {
     }
 }
 
+// Sin pasarela de pago todavía: asigna el plan directamente. Cuando haya
+// cobro recurrente, esto se vuelve un webhook de esa pasarela en vez de un
+// PATCH libre del dueño.
+async function setPlan(req, res) {
+    const { plan_code } = req.body;
+    if (typeof plan_code !== "string") {
+        return res.status(400).json({ error: "plan_code es requerido" });
+    }
+    try {
+        const { rows: planRows } = await pool.query(`SELECT id FROM plans WHERE code = $1`, [plan_code]);
+        if (!planRows[0]) return res.status(400).json({ error: "Plan inválido" });
+
+        const { rows } = await pool.query(`UPDATE stores SET plan_id = $1 WHERE id = $2 RETURNING *`, [
+            planRows[0].id,
+            req.store.id,
+        ]);
+        res.json(rows[0]);
+    } catch (err) {
+        console.error("stores.setPlan error:", err.message);
+        res.status(500).json({ error: "Error interno del servidor" });
+    }
+}
+
 async function uploadLogo(req, res) {
     const url = `/uploads/${req.file.filename}`;
     try {
@@ -194,4 +217,4 @@ async function uploadLogo(req, res) {
     }
 }
 
-module.exports = { create, mine, list, getById, getStats, update, uploadLogo };
+module.exports = { create, mine, list, getById, getStats, update, setPlan, uploadLogo };
