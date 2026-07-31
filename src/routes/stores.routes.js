@@ -18,6 +18,7 @@ router.get("/mine", requireAuth, stores.mine); // antes de "/:storeId" para que 
 router.get("/:storeId", stores.getById);
 router.patch("/:storeId", requireAuth, requireStoreOwner, stores.update);
 router.post("/:storeId/logo", requireAuth, requireStoreOwner, handleUpload("logo"), stores.uploadLogo);
+router.get("/:storeId/stats", requireAuth, requireStoreOwner, stores.getStats);
 
 router.get("/:storeId/business-hours", businessHours.getForStore);
 router.put("/:storeId/business-hours", requireAuth, requireStoreOwner, businessHours.replaceForStore);

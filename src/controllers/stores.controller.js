@@ -83,6 +83,12 @@ async function list(req, res) {
 
 async function getById(req, res) {
     try {
+        // Cuenta esta carga como una visita a la página del negocio. Es un
+        // contador simple (sin deduplicar por visitante ni desglose por
+        // fecha); si más adelante hace falta una serie de tiempo, esto se
+        // sube a una tabla de eventos en vez de este contador.
+        await pool.query(`UPDATE stores SET page_views = page_views + 1 WHERE id = $1`, [req.params.storeId]);
+
         const { rows } = await pool.query(
             `SELECT s.*, COALESCE(r.avg_rating, 0) AS avg_rating, COALESCE(r.review_count, 0) AS review_count
              FROM stores s
@@ -94,6 +100,41 @@ async function getById(req, res) {
         res.json(rows[0]);
     } catch (err) {
         console.error("stores.getById error:", err.message);
+        res.status(500).json({ error: "Error interno del servidor" });
+    }
+}
+
+// Estadísticas para el dashboard del dueño: visitas a la página, citas y
+// pedidos agrupados por estado (incluye ingresos de pedidos pagados/entregados).
+async function getStats(req, res) {
+    try {
+        const storeId = req.store.id;
+
+        const { rows: viewRows } = await pool.query(`SELECT page_views FROM stores WHERE id = $1`, [storeId]);
+
+        const { rows: appointmentsByStatus } = await pool.query(
+            `SELECT a.status, COUNT(*)::int AS count
+             FROM appointments a JOIN products p ON p.id = a.product_id
+             WHERE p.store_id = $1
+             GROUP BY a.status`,
+            [storeId]
+        );
+
+        const { rows: ordersByStatus } = await pool.query(
+            `SELECT status, COUNT(*)::int AS count, COALESCE(SUM(total_amount), 0) AS revenue
+             FROM orders
+             WHERE store_id = $1
+             GROUP BY status`,
+            [storeId]
+        );
+
+        res.json({
+            page_views: viewRows[0]?.page_views ?? 0,
+            appointments_by_status: appointmentsByStatus,
+            orders_by_status: ordersByStatus,
+        });
+    } catch (err) {
+        console.error("stores.getStats error:", err.message);
         res.status(500).json({ error: "Error interno del servidor" });
     }
 }
@@ -143,4 +184,4 @@ async function uploadLogo(req, res) {
     }
 }
 
-module.exports = { create, mine, list, getById, update, uploadLogo };
+module.exports = { create, mine, list, getById, getStats, update, uploadLogo };

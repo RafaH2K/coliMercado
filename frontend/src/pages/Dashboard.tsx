@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Trash } from "@phosphor-icons/react";
+import { Eye, ShoppingBag, Trash } from "@phosphor-icons/react";
 import { api, ApiError, imageUrl } from "../lib/api";
 import { formatDateTime } from "../lib/format";
 import { COUNTRIES, joinPhone, splitPhone } from "../lib/countries";
-import type { Appointment, BusinessHour, Category, Order, Product, Service, Store } from "../types";
+import type { Appointment, BusinessHour, Category, Order, Product, Service, Store, StoreStats } from "../types";
 
 const DAYS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 const STATUSES: Appointment["status"][] = ["pendiente", "confirmada", "completada", "no_asistio", "cancelada"];
@@ -179,6 +179,7 @@ function StorePanel({ store: initialStore }: { store: Store }) {
                 </div>
             </label>
             <div className="card-stack">
+                <StatsPanel storeId={store.id} />
                 <BusinessHoursEditor storeId={store.id} />
                 <ServicesManager storeId={store.id} />
                 <ProductsManager storeId={store.id} />
@@ -186,6 +187,80 @@ function StorePanel({ store: initialStore }: { store: Store }) {
                 <OrdersManager storeId={store.id} />
             </div>
         </div>
+    );
+}
+
+const APPOINTMENT_STAT_LABELS: Record<Appointment["status"], string> = {
+    pendiente: "Pendientes",
+    confirmada: "Confirmadas",
+    completada: "Completadas",
+    no_asistio: "No asistió",
+    cancelada: "Canceladas",
+};
+
+const ORDER_STAT_LABELS: Record<Order["status"], string> = {
+    pendiente: "Pendientes",
+    pagado: "Pagados",
+    entregado: "Entregados",
+    cancelado: "Cancelados",
+};
+
+function StatsPanel({ storeId }: { storeId: string }) {
+    const [stats, setStats] = useState<StoreStats | null>(null);
+    const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        api
+            .get<StoreStats>(`/stores/${storeId}/stats`)
+            .then(setStats)
+            .catch((err) => setError(err instanceof ApiError ? err.message : "No se pudieron cargar las estadísticas"));
+    }, [storeId]);
+
+    if (error) return <p className="error">{error}</p>;
+    if (!stats) return <section className="card"><p className="muted">Cargando estadísticas...</p></section>;
+
+    const appointmentsTotal = stats.appointments_by_status.reduce((sum, s) => sum + s.count, 0);
+    const ordersTotal = stats.orders_by_status.reduce((sum, s) => sum + s.count, 0);
+    const revenueTotal = stats.orders_by_status
+        .filter((s) => s.status === "pagado" || s.status === "entregado")
+        .reduce((sum, s) => sum + Number(s.revenue), 0);
+
+    return (
+        <section className="card">
+            <h2>Estadísticas</h2>
+            <div className="stats-grid">
+                <div className="stat-tile stat-tile-highlight">
+                    <Eye size={18} />
+                    <strong>{stats.page_views}</strong>
+                    <span className="muted">Visitas a tu página</span>
+                </div>
+                <div className="stat-tile stat-tile-highlight">
+                    <ShoppingBag size={18} />
+                    <strong>${revenueTotal.toFixed(2)}</strong>
+                    <span className="muted">Ingresos (pagados/entregados)</span>
+                </div>
+            </div>
+
+            <h3>Citas ({appointmentsTotal})</h3>
+            <div className="stats-grid">
+                {STATUSES.map((status) => (
+                    <div className="stat-tile" key={status}>
+                        <strong>{stats.appointments_by_status.find((s) => s.status === status)?.count ?? 0}</strong>
+                        <span className="muted">{APPOINTMENT_STAT_LABELS[status]}</span>
+                    </div>
+                ))}
+            </div>
+
+            <h3>Pedidos ({ordersTotal})</h3>
+            <div className="stats-grid">
+                {ORDER_STATUSES.map((status) => (
+                    <div className="stat-tile" key={status}>
+                        <strong>{stats.orders_by_status.find((s) => s.status === status)?.count ?? 0}</strong>
+                        <span className="muted">{ORDER_STAT_LABELS[status]}</span>
+                    </div>
+                ))}
+            </div>
+        </section>
     );
 }
 

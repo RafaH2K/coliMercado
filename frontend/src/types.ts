@@ -109,6 +109,12 @@ export interface Order {
     items: OrderItem[];
 }
 
+export interface StoreStats {
+    page_views: number;
+    appointments_by_status: { status: Appointment["status"]; count: number }[];
+    orders_by_status: { status: Order["status"]; count: number; revenue: string }[];
+}
+
 export interface BusinessHour {
     id?: string;
     day_of_week: number; // 0=domingo .. 6=sábado
