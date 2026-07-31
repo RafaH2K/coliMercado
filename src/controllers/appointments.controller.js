@@ -1,5 +1,8 @@
 const pool = require("../config/db");
 const { sendEmail } = require("../config/email");
+// WhatsApp: descomentar junto con notifyCancellationAlert() de abajo y con
+// WHATSAPP_TOKEN/WHATSAPP_PHONE_NUMBER_ID en .env.
+// const { sendCancellationAlert } = require("../lib/whatsappNotifications");
 
 const STATUSES = ["pendiente", "confirmada", "cancelada", "completada", "no_asistio"];
 
@@ -28,6 +31,34 @@ async function notifyAppointmentStatusChange({ customerEmail, serviceName, statu
         console.error("notifyAppointmentStatusChange error:", err.message);
     }
 }
+
+// WhatsApp (Pro): aviso inmediato al dueño cuando el CLIENTE cancela.
+// Descomentar junto con el require de sendCancellationAlert de arriba.
+// async function notifyCancellationAlert(appointmentId) {
+//     try {
+//         const { rows } = await pool.query(
+//             `SELECT s.phone AS store_phone, s.name AS store_name, s.timezone,
+//                     pl.whatsapp_cancellation_alerts, p.name AS service_name, a.starts_at
+//              FROM appointments a
+//              JOIN products p ON p.id = a.product_id
+//              JOIN stores s ON s.id = p.store_id
+//              LEFT JOIN plans pl ON pl.id = s.plan_id
+//              WHERE a.id = $1`,
+//             [appointmentId]
+//         );
+//         const info = rows[0];
+//         if (!info || !info.whatsapp_cancellation_alerts || !info.store_phone) return;
+//         await sendCancellationAlert({
+//             storePhone: info.store_phone,
+//             storeName: info.store_name,
+//             serviceName: info.service_name,
+//             startsAt: info.starts_at,
+//             timezone: info.timezone,
+//         });
+//     } catch (err) {
+//         console.error("notifyCancellationAlert error:", err.message);
+//     }
+// }
 
 async function create(req, res) {
     const { product_id, starts_at, notes, party_size } = req.body;
@@ -184,6 +215,10 @@ async function updateStatus(req, res) {
                 status,
             });
         }
+        // WhatsApp (Pro): descomentar junto con notifyCancellationAlert() de arriba.
+        // if (status === "cancelada" && !isOwner) {
+        //     notifyCancellationAlert(req.params.id);
+        // }
         res.json(updated[0]);
     } catch (err) {
         console.error("appointments.updateStatus error:", err.message);
