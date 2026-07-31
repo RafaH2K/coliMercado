@@ -140,6 +140,15 @@ export interface Slot {
     ends_at: string;
 }
 
+export interface Message {
+    id: string;
+    order_id: string | null;
+    appointment_id: string | null;
+    sender_id: string;
+    body: string;
+    created_at: string;
+}
+
 export interface Appointment {
     id: string;
     product_id: string;
