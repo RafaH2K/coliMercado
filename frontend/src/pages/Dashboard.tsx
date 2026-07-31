@@ -162,6 +162,14 @@ function StorePanel({ store: initialStore }: { store: Store }) {
 
     return (
         <div>
+            {!store.is_active && (
+                <div className="card" style={{ borderColor: "var(--accent)", background: "var(--accent-bg)" }}>
+                    <p>
+                        <strong>Tu negocio está pendiente de aprobación.</strong> Todavía no aparece en el mercado ni
+                        puede recibir citas o pedidos. Mientras tanto puedes preparar horario, servicios y productos.
+                    </p>
+                </div>
+            )}
             {store.logo_url && <img src={imageUrl(store.logo_url)!} alt="" className="store-logo-large" />}
             <h1>{store.name}</h1>
             <p className="muted">Zona horaria: {store.timezone}</p>

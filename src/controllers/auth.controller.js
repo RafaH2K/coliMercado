@@ -27,7 +27,7 @@ async function register(req, res) {
         const { rows } = await pool.query(
             `INSERT INTO users (name, email, phone, password_hash)
              VALUES ($1, $2, $3, $4)
-             RETURNING id, name, email, phone, created_at`,
+             RETURNING id, name, email, phone, is_admin, created_at`,
             [name || null, email, phone || null, password_hash]
         );
         const user = rows[0];
@@ -50,7 +50,7 @@ async function login(req, res) {
 
     try {
         const { rows } = await pool.query(
-            `SELECT id, name, email, phone, password_hash FROM users WHERE email = $1`,
+            `SELECT id, name, email, phone, is_admin, password_hash FROM users WHERE email = $1`,
             [email]
         );
         const user = rows[0];

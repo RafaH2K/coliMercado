@@ -31,7 +31,8 @@ async function add(req, res) {
     }
     try {
         const { rows: productRows } = await pool.query(
-            `SELECT stock FROM products WHERE id = $1 AND type = 'product' AND is_active = TRUE`,
+            `SELECT p.stock FROM products p JOIN stores s ON s.id = p.store_id
+             WHERE p.id = $1 AND p.type = 'product' AND p.is_active = TRUE AND s.is_active = TRUE`,
             [product_id]
         );
         const product = productRows[0];

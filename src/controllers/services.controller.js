@@ -91,7 +91,7 @@ async function getById(req, res) {
         const { rows } = await pool.query(
             `SELECT p.*, s.timezone AS store_timezone, ${IMAGES_SUBQUERY}
              FROM products p JOIN stores s ON s.id = p.store_id
-             WHERE p.id = $1 AND p.type = 'service'`,
+             WHERE p.id = $1 AND p.type = 'service' AND s.is_active = TRUE`,
             [req.params.id]
         );
         if (!rows[0]) return res.status(404).json({ error: "Servicio no encontrado" });
@@ -174,7 +174,7 @@ async function availability(req, res) {
         const { rows: productRows } = await pool.query(
             `SELECT p.*, s.timezone AS store_timezone
              FROM products p JOIN stores s ON s.id = p.store_id
-             WHERE p.id = $1 AND p.type = 'service' AND p.is_active = TRUE`,
+             WHERE p.id = $1 AND p.type = 'service' AND p.is_active = TRUE AND s.is_active = TRUE`,
             [req.params.id]
         );
         const service = productRows[0];

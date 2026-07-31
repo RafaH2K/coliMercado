@@ -13,9 +13,13 @@ async function create(req, res) {
         return res.status(400).json({ error: "timezone debe ser una zona IANA válida (ej. America/Mexico_City)" });
     }
     try {
+        // Todo negocio nuevo nace pendiente de aprobación (is_active = FALSE):
+        // no aparece en el mercado ni es accesible públicamente hasta que un
+        // admin lo aprueba (ver admin.controller.js). El dueño sí puede
+        // preparar su negocio desde el dashboard mientras tanto.
         const { rows } = await pool.query(
-            `INSERT INTO stores (owner_id, name, description, logo_url, timezone, city, phone)
-             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+            `INSERT INTO stores (owner_id, name, description, logo_url, timezone, city, phone, is_active)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE) RETURNING *`,
             [
                 req.user.id,
                 name,
@@ -83,11 +87,15 @@ async function list(req, res) {
 
 async function getById(req, res) {
     try {
-        // Cuenta esta carga como una visita a la página del negocio. Es un
-        // contador simple (sin deduplicar por visitante ni desglose por
-        // fecha); si más adelante hace falta una serie de tiempo, esto se
-        // sube a una tabla de eventos en vez de este contador.
-        await pool.query(`UPDATE stores SET page_views = page_views + 1 WHERE id = $1`, [req.params.storeId]);
+        // Cuenta esta carga como una visita a la página del negocio (solo si
+        // el negocio está aprobado/activo). Es un contador simple (sin
+        // deduplicar por visitante ni desglose por fecha); si más adelante
+        // hace falta una serie de tiempo, esto se sube a una tabla de eventos.
+        const { rows: updated } = await pool.query(
+            `UPDATE stores SET page_views = page_views + 1 WHERE id = $1 AND is_active = TRUE RETURNING id`,
+            [req.params.storeId]
+        );
+        if (!updated[0]) return res.status(404).json({ error: "Negocio no encontrado" });
 
         const { rows } = await pool.query(
             `SELECT s.*, COALESCE(r.avg_rating, 0) AS avg_rating, COALESCE(r.review_count, 0) AS review_count
@@ -96,7 +104,6 @@ async function getById(req, res) {
              WHERE s.id = $1`,
             [req.params.storeId]
         );
-        if (!rows[0]) return res.status(404).json({ error: "Negocio no encontrado" });
         res.json(rows[0]);
     } catch (err) {
         console.error("stores.getById error:", err.message);
@@ -139,8 +146,11 @@ async function getStats(req, res) {
     }
 }
 
+// is_active NO es editable aquí a propósito: la aprobación es exclusiva del
+// admin (ver admin.controller.js). Si el dueño pudiera tocarla, se saltaría
+// la revisión con un PATCH directo.
 async function update(req, res) {
-    const { name, description, logo_url, is_active, timezone, city, phone } = req.body;
+    const { name, description, logo_url, timezone, city, phone } = req.body;
     if (timezone && !isValidTimeZone(timezone)) {
         return res.status(400).json({ error: "timezone debe ser una zona IANA válida (ej. America/Mexico_City)" });
     }
@@ -150,13 +160,12 @@ async function update(req, res) {
                 name = COALESCE($1, name),
                 description = COALESCE($2, description),
                 logo_url = COALESCE($3, logo_url),
-                is_active = COALESCE($4, is_active),
-                timezone = COALESCE($5, timezone),
-                city = COALESCE($6, city),
-                phone = COALESCE($7, phone)
-             WHERE id = $8
+                timezone = COALESCE($4, timezone),
+                city = COALESCE($5, city),
+                phone = COALESCE($6, phone)
+             WHERE id = $7
              RETURNING *`,
-            [name, description, logo_url, is_active, timezone, city, phone, req.store.id]
+            [name, description, logo_url, timezone, city, phone, req.store.id]
         );
         res.json(rows[0]);
     } catch (err) {

@@ -20,8 +20,9 @@ async function create(req, res) {
         await client.query("BEGIN");
 
         const { rows: productRows } = await client.query(
-            `SELECT id, duration_minutes, capacity, is_active FROM products
-             WHERE id = $1 AND type = 'service'`,
+            `SELECT p.id, p.duration_minutes, p.capacity, p.is_active
+             FROM products p JOIN stores s ON s.id = p.store_id
+             WHERE p.id = $1 AND p.type = 'service' AND s.is_active = TRUE`,
             [product_id]
         );
         const service = productRows[0];

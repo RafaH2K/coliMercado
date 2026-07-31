@@ -79,7 +79,7 @@ async function getById(req, res) {
         const { rows } = await pool.query(
             `SELECT p.*, s.name AS store_name, s.city AS store_city, ${IMAGES_SUBQUERY}
              FROM products p JOIN stores s ON s.id = p.store_id
-             WHERE p.id = $1 AND p.type = 'product'`,
+             WHERE p.id = $1 AND p.type = 'product' AND s.is_active = TRUE`,
             [req.params.id]
         );
         if (!rows[0]) return res.status(404).json({ error: "Producto no encontrado" });

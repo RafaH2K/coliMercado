@@ -3,6 +3,7 @@ export interface User {
     name: string | null;
     email: string;
     phone: string | null;
+    is_admin: boolean;
     created_at: string;
 }
 
@@ -19,6 +20,17 @@ export interface Store {
     created_at: string;
     avg_rating?: number;
     review_count?: number;
+}
+
+export interface PendingStore {
+    id: string;
+    name: string;
+    description: string | null;
+    city: string | null;
+    phone: string | null;
+    created_at: string;
+    owner_name: string | null;
+    owner_email: string;
 }
 
 export interface Category {

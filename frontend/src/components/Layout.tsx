@@ -39,6 +39,7 @@ export default function Layout() {
 
                     {user && <Link to="/favoritos">Favoritos</Link>}
                     {user && <Link to="/mi-negocio">Mi negocio</Link>}
+                    {user?.is_admin && <Link to="/admin">Admin</Link>}
                     {user ? (
                         <>
                             <span className="nav-user">{user.email}</span>

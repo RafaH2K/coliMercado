@@ -14,6 +14,7 @@ import Cart from "./pages/Cart";
 import CheckoutSuccess from "./pages/CheckoutSuccess";
 import MyOrders from "./pages/MyOrders";
 import Marketplace from "./pages/Marketplace";
+import Admin from "./pages/Admin";
 
 export default function App() {
     return (
@@ -71,6 +72,14 @@ export default function App() {
                     element={
                         <RequireAuth>
                             <Dashboard />
+                        </RequireAuth>
+                    }
+                />
+                <Route
+                    path="/admin"
+                    element={
+                        <RequireAuth>
+                            <Admin />
                         </RequireAuth>
                     }
                 />
