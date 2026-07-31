@@ -1,5 +1,26 @@
 const pool = require("../config/db");
 const stripe = require("../config/stripe");
+const { sendEmail } = require("../config/email");
+
+// No se espera (fire-and-forget): un correo que tarda o falla no debe
+// retrasar ni tumbar la respuesta del pedido. Los errores solo se loggean.
+async function notifyNewOrder(order) {
+    try {
+        const { rows } = await pool.query(
+            `SELECT u.email, s.name AS store_name FROM stores s JOIN users u ON u.id = s.owner_id WHERE s.id = $1`,
+            [order.store_id]
+        );
+        const owner = rows[0];
+        if (!owner) return;
+        await sendEmail({
+            to: owner.email,
+            subject: `Nuevo pedido en ${owner.store_name}`,
+            html: `<p>Tienes un nuevo pedido por $${order.total_amount}.</p><p>Entra a tu panel de negocio para verlo y actualizarlo.</p>`,
+        });
+    } catch (err) {
+        console.error("notifyNewOrder error:", err.message);
+    }
+}
 
 const ITEMS_SUBQUERY = `
     COALESCE(
@@ -92,6 +113,7 @@ async function placeOrders(userId, { provider, status, stripeSessionId = null })
 
         await client.query(`DELETE FROM cart_items WHERE user_id = $1`, [userId]);
         await client.query("COMMIT");
+        for (const order of createdOrders) notifyNewOrder(order);
         return createdOrders;
     } catch (err) {
         await client.query("ROLLBACK");

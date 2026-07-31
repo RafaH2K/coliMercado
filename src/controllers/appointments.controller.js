@@ -1,6 +1,33 @@
 const pool = require("../config/db");
+const { sendEmail } = require("../config/email");
 
 const STATUSES = ["pendiente", "confirmada", "cancelada", "completada", "no_asistio"];
+
+// Fire-and-forget: un correo que falla no debe tumbar la reserva ni el
+// cambio de estado, solo se loggea.
+async function notifyNewAppointment({ ownerEmail, storeName, serviceName, startsAt }) {
+    try {
+        await sendEmail({
+            to: ownerEmail,
+            subject: `Nueva cita en ${storeName}`,
+            html: `<p>Tienes una nueva cita: <strong>${serviceName}</strong> el ${new Date(startsAt).toLocaleString("es-MX")}.</p><p>Entra a tu panel de negocio para verla.</p>`,
+        });
+    } catch (err) {
+        console.error("notifyNewAppointment error:", err.message);
+    }
+}
+
+async function notifyAppointmentStatusChange({ customerEmail, serviceName, status }) {
+    try {
+        await sendEmail({
+            to: customerEmail,
+            subject: `Actualización de tu cita: ${serviceName}`,
+            html: `<p>Tu cita de <strong>${serviceName}</strong> cambió de estado a: <strong>${status}</strong>.</p>`,
+        });
+    } catch (err) {
+        console.error("notifyAppointmentStatusChange error:", err.message);
+    }
+}
 
 async function create(req, res) {
     const { product_id, starts_at, notes, party_size } = req.body;
@@ -20,8 +47,8 @@ async function create(req, res) {
         await client.query("BEGIN");
 
         const { rows: productRows } = await client.query(
-            `SELECT p.id, p.duration_minutes, p.capacity, p.is_active
-             FROM products p JOIN stores s ON s.id = p.store_id
+            `SELECT p.id, p.name, p.duration_minutes, p.capacity, p.is_active, s.name AS store_name, u.email AS owner_email
+             FROM products p JOIN stores s ON s.id = p.store_id JOIN users u ON u.id = s.owner_id
              WHERE p.id = $1 AND p.type = 'service' AND s.is_active = TRUE AND s.is_admin_approved = TRUE`,
             [product_id]
         );
@@ -60,6 +87,12 @@ async function create(req, res) {
         );
 
         await client.query("COMMIT");
+        notifyNewAppointment({
+            ownerEmail: service.owner_email,
+            storeName: service.store_name,
+            serviceName: service.name,
+            startsAt: start,
+        });
         res.status(201).json(rows[0]);
     } catch (err) {
         await client.query("ROLLBACK");
@@ -120,10 +153,11 @@ async function updateStatus(req, res) {
 
     try {
         const { rows } = await pool.query(
-            `SELECT a.id, a.customer_id, s.owner_id
+            `SELECT a.id, a.customer_id, u.email AS customer_email, s.owner_id, p.name AS service_name
              FROM appointments a
              JOIN products p ON p.id = a.product_id
              JOIN stores s ON s.id = p.store_id
+             JOIN users u ON u.id = a.customer_id
              WHERE a.id = $1`,
             [req.params.id]
         );
@@ -141,6 +175,15 @@ async function updateStatus(req, res) {
             `UPDATE appointments SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
             [status, req.params.id]
         );
+        // Solo se notifica cuando el negocio hace el cambio: si el cliente
+        // canceló su propia cita, ya lo sabe, no hace falta avisarle.
+        if (isOwner) {
+            notifyAppointmentStatusChange({
+                customerEmail: appt.customer_email,
+                serviceName: appt.service_name,
+                status,
+            });
+        }
         res.json(updated[0]);
     } catch (err) {
         console.error("appointments.updateStatus error:", err.message);

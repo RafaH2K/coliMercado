@@ -1,4 +1,20 @@
 const pool = require("../config/db");
+const { sendEmail } = require("../config/email");
+
+// Fire-and-forget: un correo que falla no debe tumbar la aprobación.
+async function notifyStoreApproved(store) {
+    try {
+        const { rows } = await pool.query(`SELECT email FROM users WHERE id = $1`, [store.owner_id]);
+        if (!rows[0]) return;
+        await sendEmail({
+            to: rows[0].email,
+            subject: `¡${store.name} fue aprobado!`,
+            html: `<p>Tu negocio <strong>${store.name}</strong> ya fue aprobado y aparece en el mercado.</p>`,
+        });
+    } catch (err) {
+        console.error("notifyStoreApproved error:", err.message);
+    }
+}
 
 const STORE_ADMIN_FIELDS = `
     s.id, s.name, s.description, s.city, s.phone, s.is_active, s.created_at,
@@ -44,6 +60,7 @@ async function approveStore(req, res) {
             [req.params.id]
         );
         if (!rows[0]) return res.status(404).json({ error: "Negocio no encontrado o ya estaba aprobado" });
+        notifyStoreApproved(rows[0]);
         res.json(rows[0]);
     } catch (err) {
         console.error("admin.approveStore error:", err.message);
