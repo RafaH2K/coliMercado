@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { CalendarBlank, UsersThree, XCircle } from "@phosphor-icons/react";
 import { api, ApiError } from "../lib/api";
 import { formatDateTime } from "../lib/format";
 import type { Appointment } from "../types";
@@ -28,26 +29,36 @@ export default function MyAppointments() {
     }
 
     if (error) return <p className="error">{error}</p>;
-    if (!appointments) return <p>Cargando...</p>;
-    if (appointments.length === 0) return <p>Todavía no tienes citas reservadas.</p>;
+    if (!appointments) return <p className="muted">Cargando...</p>;
 
     return (
         <div>
             <h1>Mis citas</h1>
-            <div className="grid">
-                {appointments.map((a) => (
-                    <div className="card" key={a.id}>
-                        <h3>{a.service_name}</h3>
-                        <p>{formatDateTime(a.starts_at, a.store_timezone)}</p>
-                        <p className={`badge badge-${a.status}`}>{a.status}</p>
-                        {CANCELABLE.includes(a.status) && (
-                            <button className="btn btn-ghost" onClick={() => cancel(a.id)}>
-                                Cancelar
-                            </button>
-                        )}
-                    </div>
-                ))}
-            </div>
+            {appointments.length === 0 ? (
+                <p className="muted">Todavía no tienes citas reservadas.</p>
+            ) : (
+                <div className="grid">
+                    {appointments.map((a) => (
+                        <div className="card" key={a.id}>
+                            <h3>{a.service_name}</h3>
+                            <p className="muted" style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                <CalendarBlank size={14} /> {formatDateTime(a.starts_at, a.store_timezone)}
+                            </p>
+                            {!!a.party_size && (
+                                <p className="muted" style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                    <UsersThree size={14} /> {a.party_size} personas
+                                </p>
+                            )}
+                            <p className={`badge badge-${a.status}`}>{a.status}</p>
+                            {CANCELABLE.includes(a.status) && (
+                                <button className="btn btn-ghost btn-sm" onClick={() => cancel(a.id)}>
+                                    <XCircle size={14} /> Cancelar
+                                </button>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            )}
         </div>
     );
 }

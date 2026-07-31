@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { CalendarBlank, CheckCircle, Clock, UsersThree } from "@phosphor-icons/react";
 import { api, ApiError, imageUrl } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { formatDateTime, formatTime } from "../lib/format";
@@ -22,6 +23,7 @@ export default function ServiceDetail() {
     const [error, setError] = useState<string | null>(null);
     const [booking, setBooking] = useState<string | null>(null); // starts_at siendo reservado
     const [confirmed, setConfirmed] = useState<Appointment | null>(null);
+    const [partySize, setPartySize] = useState("");
 
     useEffect(() => {
         if (!serviceId) return;
@@ -48,6 +50,7 @@ export default function ServiceDetail() {
             const appointment = await api.post<Appointment>("/appointments", {
                 product_id: serviceId,
                 starts_at: slot.starts_at,
+                party_size: partySize ? Number(partySize) : undefined,
             });
             setConfirmed(appointment);
             setSlots((prev) => prev && prev.filter((s) => s.starts_at !== slot.starts_at));
@@ -59,28 +62,42 @@ export default function ServiceDetail() {
     }
 
     if (error && !service) return <p className="error">{error}</p>;
-    if (!service) return <p>Cargando...</p>;
+    if (!service) return <p className="muted">Cargando...</p>;
+
+    const [hero, ...rest] = service.images ?? [];
 
     return (
         <div>
-            {!!service.images?.length && (
-                <div className="gallery">
-                    {service.images.map((img) => (
-                        <img key={img.id} src={imageUrl(img.url)!} alt="" />
-                    ))}
+            {hero && (
+                <div className="service-gallery">
+                    <img src={imageUrl(hero.url)!} alt="" className="service-hero-img" />
+                    {rest.length > 0 && (
+                        <div className="gallery">
+                            {rest.map((img) => (
+                                <img key={img.id} src={imageUrl(img.url)!} alt="" />
+                            ))}
+                        </div>
+                    )}
                 </div>
             )}
             <h1>{service.name}</h1>
             {service.description && <p>{service.description}</p>}
-            <p className="price">
-                ${service.price} · {service.duration_minutes} min
+            <p className="price" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                ${service.price}
+                {service.duration_minutes && (
+                    <span className="muted" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                        <Clock size={14} /> {service.duration_minutes} min
+                    </span>
+                )}
             </p>
 
             {confirmed && (
                 <div className="card success">
-                    <p>
+                    <p style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <CheckCircle weight="fill" size={18} color="var(--success)" />
                         Cita reservada para {formatDateTime(confirmed.starts_at, service.store_timezone)} (hora del
-                        negocio). Estado: {confirmed.status}.
+                        negocio){confirmed.party_size ? `, ${confirmed.party_size} personas` : ""}. Estado:{" "}
+                        {confirmed.status}.
                     </p>
                     <Link to="/mis-citas">Ver mis citas</Link>
                 </div>
@@ -93,7 +110,9 @@ export default function ServiceDetail() {
             ) : (
                 <div className="booking">
                     <label className="field">
-                        Fecha
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                            <CalendarBlank size={14} /> Fecha
+                        </span>
                         <input
                             type="date"
                             value={date}
@@ -101,14 +120,27 @@ export default function ServiceDetail() {
                             onChange={(e) => setDate(e.target.value)}
                         />
                     </label>
+                    <label className="field">
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                            <UsersThree size={14} /> Número de personas (opcional)
+                        </span>
+                        <input
+                            type="number"
+                            min={1}
+                            value={partySize}
+                            onChange={(e) => setPartySize(e.target.value)}
+                            placeholder="Ej. 4"
+                            style={{ maxWidth: 120 }}
+                        />
+                    </label>
                     {service.store_timezone && <p className="muted">Horarios en {service.store_timezone}</p>}
 
                     {error && <p className="error">{error}</p>}
 
                     {!slots ? (
-                        <p>Buscando horarios disponibles...</p>
+                        <p className="muted">Buscando horarios disponibles...</p>
                     ) : slots.length === 0 ? (
-                        <p>No hay horarios disponibles ese día.</p>
+                        <p className="muted">No hay horarios disponibles ese día.</p>
                     ) : (
                         <div className="slots">
                             {slots.map((slot) => (

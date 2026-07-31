@@ -6,9 +6,12 @@ const helmet = require("helmet");
 const authRoutes = require("./routes/auth.routes");
 const storesRoutes = require("./routes/stores.routes");
 const servicesRoutes = require("./routes/services.routes");
+const productsRoutes = require("./routes/products.routes");
 const appointmentsRoutes = require("./routes/appointments.routes");
 const categoriesRoutes = require("./routes/categories.routes");
 const favoritesRoutes = require("./routes/favorites.routes");
+const cartRoutes = require("./routes/cart.routes");
+const ordersRoutes = require("./routes/orders.routes");
 const { UPLOAD_DIR } = require("./config/upload");
 
 const app = express();
@@ -31,9 +34,12 @@ app.use(
 app.use("/api/auth", authRoutes);
 app.use("/api/stores", storesRoutes);
 app.use("/api/services", servicesRoutes);
+app.use("/api/products", productsRoutes);
 app.use("/api/appointments", appointmentsRoutes);
 app.use("/api/categories", categoriesRoutes);
 app.use("/api/favorites", favoritesRoutes);
+app.use("/api/cart", cartRoutes);
+app.use("/api/orders", ordersRoutes);
 
 app.get("/", (req, res) => {
     res.send("server responde hola");

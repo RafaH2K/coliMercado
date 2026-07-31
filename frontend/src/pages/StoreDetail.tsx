@@ -1,8 +1,19 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
+import { Heart, MapPin, Phone, Star, WhatsappLogo } from "@phosphor-icons/react";
 import { api, ApiError, imageUrl } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import type { Review, Service, Store } from "../types";
+import type { Product, Review, Service, Store } from "../types";
+
+function Stars({ n }: { n: number }) {
+    return (
+        <span className="rating">
+            {Array.from({ length: 5 }, (_, i) => (
+                <Star key={i} weight={i < n ? "fill" : "regular"} size={14} />
+            ))}
+        </span>
+    );
+}
 
 function FavoriteButton({ storeId }: { storeId: string }) {
     const { user } = useAuth();
@@ -37,7 +48,8 @@ function FavoriteButton({ storeId }: { storeId: string }) {
 
     return (
         <button className="btn btn-ghost" onClick={toggle} disabled={loading}>
-            {isFavorite ? "♥ En favoritos" : "♡ Agregar a favoritos"}
+            <Heart weight={isFavorite ? "fill" : "regular"} size={16} color={isFavorite ? "var(--danger)" : undefined} />
+            {isFavorite ? "En favoritos" : "Agregar a favoritos"}
         </button>
     );
 }
@@ -79,7 +91,7 @@ function ReviewsSection({ storeId }: { storeId: string }) {
                     <select value={rating} onChange={(e) => setRating(Number(e.target.value))}>
                         {[5, 4, 3, 2, 1].map((n) => (
                             <option key={n} value={n}>
-                                {"★".repeat(n)}
+                                {n} estrella{n > 1 ? "s" : ""}
                             </option>
                         ))}
                     </select>
@@ -91,16 +103,21 @@ function ReviewsSection({ storeId }: { storeId: string }) {
             )}
             {error && <p className="error">{error}</p>}
             {!reviews ? (
-                <p>Cargando reseñas...</p>
+                <p className="muted">Cargando reseñas...</p>
             ) : reviews.length === 0 ? (
                 <p className="muted">Todavía no hay reseñas.</p>
             ) : (
-                reviews.map((r) => (
-                    <div className="card" key={r.id} style={{ marginBottom: 8 }}>
-                        <strong>{"★".repeat(r.rating)}</strong> · {r.customer_name}
-                        {r.comment && <p>{r.comment}</p>}
-                    </div>
-                ))
+                <div className="review-list">
+                    {reviews.map((r) => (
+                        <div className="card" key={r.id}>
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                <Stars n={r.rating} />
+                                <span className="muted">{r.customer_name}</span>
+                            </div>
+                            {r.comment && <p style={{ marginTop: 8 }}>{r.comment}</p>}
+                        </div>
+                    ))}
+                </div>
             )}
         </section>
     );
@@ -112,10 +129,10 @@ function ContactButtons({ phone }: { phone: string | null }) {
     return (
         <div className="inline-form">
             <a className="btn" href={`tel:${phone}`}>
-                Llamar
+                <Phone size={16} /> Llamar
             </a>
             <a className="btn btn-primary" href={`https://wa.me/${digits}`} target="_blank" rel="noreferrer">
-                WhatsApp
+                <WhatsappLogo weight="fill" size={16} /> WhatsApp
             </a>
         </div>
     );
@@ -125,38 +142,50 @@ export default function StoreDetail() {
     const { storeId } = useParams<{ storeId: string }>();
     const [store, setStore] = useState<Store | null>(null);
     const [services, setServices] = useState<Service[] | null>(null);
+    const [products, setProducts] = useState<Product[] | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         if (!storeId) return;
-        Promise.all([api.get<Store>(`/stores/${storeId}`), api.get<Service[]>(`/stores/${storeId}/services`)])
-            .then(([store, services]) => {
+        Promise.all([
+            api.get<Store>(`/stores/${storeId}`),
+            api.get<Service[]>(`/stores/${storeId}/services`),
+            api.get<Product[]>(`/stores/${storeId}/products`),
+        ])
+            .then(([store, services, products]) => {
                 setStore(store);
                 setServices(services);
+                setProducts(products);
             })
             .catch((err) => setError(err instanceof ApiError ? err.message : "No se pudo cargar el negocio"));
     }, [storeId]);
 
     if (error) return <p className="error">{error}</p>;
-    if (!store || !services) return <p>Cargando...</p>;
+    if (!store || !services || !products) return <p className="muted">Cargando...</p>;
 
     return (
         <div>
-            {store.logo_url && <img src={imageUrl(store.logo_url)!} alt="" className="store-logo-large" />}
-            <h1>{store.name}</h1>
-            {store.city && <p className="muted">{store.city}</p>}
-            {store.description && <p>{store.description}</p>}
-            {!!store.review_count && (
-                <p>
-                    ★ {store.avg_rating?.toFixed(1)} ({store.review_count} reseñas)
-                </p>
-            )}
-            <ContactButtons phone={store.phone} />
-            <FavoriteButton storeId={store.id} />
+            <div className="store-hero">
+                {store.logo_url && <img src={imageUrl(store.logo_url)!} alt="" className="store-logo-large" />}
+                <div>
+                    <h1>{store.name}</h1>
+                    {store.city && (
+                        <p className="muted" style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                            <MapPin size={14} /> {store.city}
+                        </p>
+                    )}
+                    {store.description && <p>{store.description}</p>}
+                    {!!store.review_count && <Rating avg={store.avg_rating} count={store.review_count} />}
+                    <div className="store-actions">
+                        <ContactButtons phone={store.phone} />
+                        <FavoriteButton storeId={store.id} />
+                    </div>
+                </div>
+            </div>
 
             <h2>Servicios</h2>
             {services.length === 0 ? (
-                <p>Este negocio todavía no publica servicios reservables.</p>
+                <p className="muted">Este negocio todavía no publica servicios reservables.</p>
             ) : (
                 <div className="grid">
                     {services.map((service) => (
@@ -173,7 +202,35 @@ export default function StoreDetail() {
                 </div>
             )}
 
+            {products.length > 0 && (
+                <>
+                    <h2>Productos</h2>
+                    <div className="grid">
+                        {products.map((product) => (
+                            <Link to={`/productos/${product.id}`} key={product.id} className="card">
+                                {product.images?.[0] && (
+                                    <img src={imageUrl(product.images[0].url)!} alt="" className="service-thumb" />
+                                )}
+                                <h3>{product.name}</h3>
+                                {product.description && <p>{product.description}</p>}
+                                <p className="price">${product.price}</p>
+                                <p className="muted">{product.stock === 0 ? "Agotado" : `${product.stock} disponibles`}</p>
+                            </Link>
+                        ))}
+                    </div>
+                </>
+            )}
+
             <ReviewsSection storeId={store.id} />
         </div>
+    );
+}
+
+function Rating({ avg, count }: { avg?: number; count?: number }) {
+    return (
+        <span className="rating" style={{ marginBottom: 8 }}>
+            <Star weight="fill" size={14} />
+            {avg?.toFixed(1)} ({count} reseñas)
+        </span>
     );
 }

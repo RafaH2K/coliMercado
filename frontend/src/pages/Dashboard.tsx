@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Trash } from "@phosphor-icons/react";
 import { api, ApiError, imageUrl } from "../lib/api";
 import { formatDateTime } from "../lib/format";
 import { COUNTRIES, joinPhone, splitPhone } from "../lib/countries";
-import type { Appointment, BusinessHour, Service, Store } from "../types";
+import type { Appointment, BusinessHour, Category, Order, Product, Service, Store } from "../types";
 
 const DAYS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 const STATUSES: Appointment["status"][] = ["pendiente", "confirmada", "completada", "no_asistio", "cancelada"];
@@ -177,9 +178,13 @@ function StorePanel({ store: initialStore }: { store: Store }) {
                     </button>
                 </div>
             </label>
-            <BusinessHoursEditor storeId={store.id} />
-            <ServicesManager storeId={store.id} />
-            <AppointmentsManager storeId={store.id} storeTimezone={store.timezone} />
+            <div className="card-stack">
+                <BusinessHoursEditor storeId={store.id} />
+                <ServicesManager storeId={store.id} />
+                <ProductsManager storeId={store.id} />
+                <AppointmentsManager storeId={store.id} storeTimezone={store.timezone} />
+                <OrdersManager storeId={store.id} />
+            </div>
         </div>
     );
 }
@@ -260,7 +265,8 @@ function BusinessHoursEditor({ storeId }: { storeId: string }) {
 
 function ServicesManager({ storeId }: { storeId: string }) {
     const [services, setServices] = useState<Service[] | null>(null);
-    const [form, setForm] = useState({ name: "", description: "", price: "", duration_minutes: "30", buffer_minutes: "0", capacity: "1" });
+    const [categories, setCategories] = useState<Category[]>([]);
+    const [form, setForm] = useState({ name: "", description: "", price: "", duration_minutes: "30", buffer_minutes: "0", capacity: "1", category_id: "" });
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
 
@@ -269,6 +275,9 @@ function ServicesManager({ storeId }: { storeId: string }) {
     }
 
     useEffect(load, [storeId]);
+    useEffect(() => {
+        api.get<Category[]>("/categories?kind=service").then(setCategories).catch(() => {});
+    }, []);
 
     async function handleSubmit(e: FormEvent) {
         e.preventDefault();
@@ -282,8 +291,9 @@ function ServicesManager({ storeId }: { storeId: string }) {
                 duration_minutes: Number(form.duration_minutes),
                 buffer_minutes: Number(form.buffer_minutes),
                 capacity: Number(form.capacity),
+                category_id: form.category_id || undefined,
             });
-            setForm({ name: "", description: "", price: "", duration_minutes: "30", buffer_minutes: "0", capacity: "1" });
+            setForm({ name: "", description: "", price: "", duration_minutes: "30", buffer_minutes: "0", capacity: "1", category_id: "" });
             load();
         } catch (err) {
             setError(err instanceof ApiError ? err.message : "No se pudo crear el servicio");
@@ -302,6 +312,14 @@ function ServicesManager({ storeId }: { storeId: string }) {
             <form onSubmit={handleSubmit} className="inline-form">
                 <input placeholder="Nombre" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} required />
                 <input placeholder="Descripción" value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} />
+                <select value={form.category_id} onChange={(e) => setForm((f) => ({ ...f, category_id: e.target.value }))}>
+                    <option value="">Sin categoría</option>
+                    {categories.map((c) => (
+                        <option key={c.id} value={c.id}>
+                            {c.name}
+                        </option>
+                    ))}
+                </select>
                 <input placeholder="Precio" type="number" min="0" step="0.01" value={form.price} onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))} required />
                 <input placeholder="Duración (min)" type="number" min="1" value={form.duration_minutes} onChange={(e) => setForm((f) => ({ ...f, duration_minutes: e.target.value }))} required />
                 <input placeholder="Colchón (min)" type="number" min="0" value={form.buffer_minutes} onChange={(e) => setForm((f) => ({ ...f, buffer_minutes: e.target.value }))} />
@@ -352,7 +370,7 @@ function ServiceRow({ service, onChanged }: { service: Service; onChanged: () =>
                     <div key={img.id} className="gallery-item">
                         <img src={imageUrl(img.url)!} alt="" />
                         <button className="btn btn-ghost btn-sm" onClick={() => removeImage(img.id)}>
-                            Quitar
+                            <Trash size={13} /> Quitar
                         </button>
                     </div>
                 ))}
@@ -397,11 +415,178 @@ function AppointmentsManager({ storeId, storeTimezone }: { storeId: string; stor
                 appointments.map((a) => (
                     <div className="appointment-row" key={a.id}>
                         <span>
-                            {a.service_name} · {formatDateTime(a.starts_at, storeTimezone)} ·{" "}
+                            {a.service_name} · {formatDateTime(a.starts_at, storeTimezone)}
+                            {a.party_size ? ` · ${a.party_size} personas` : ""} ·{" "}
                             {a.customer_name || a.customer_email}
                         </span>
                         <select value={a.status} onChange={(e) => changeStatus(a.id, e.target.value as Appointment["status"])}>
                             {STATUSES.map((s) => (
+                                <option key={s} value={s}>
+                                    {s}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+                ))
+            )}
+        </section>
+    );
+}
+
+function ProductsManager({ storeId }: { storeId: string }) {
+    const [products, setProducts] = useState<Product[] | null>(null);
+    const [categories, setCategories] = useState<Category[]>([]);
+    const [form, setForm] = useState({ name: "", description: "", price: "", stock: "1", category_id: "" });
+    const [error, setError] = useState<string | null>(null);
+    const [loading, setLoading] = useState(false);
+
+    function load() {
+        api.get<Product[]>(`/stores/${storeId}/products`).then(setProducts);
+    }
+
+    useEffect(load, [storeId]);
+    useEffect(() => {
+        api.get<Category[]>("/categories?kind=product").then(setCategories).catch(() => {});
+    }, []);
+
+    async function handleSubmit(e: FormEvent) {
+        e.preventDefault();
+        setLoading(true);
+        setError(null);
+        try {
+            await api.post(`/stores/${storeId}/products`, {
+                name: form.name,
+                description: form.description,
+                price: Number(form.price),
+                stock: Number(form.stock),
+                category_id: form.category_id || undefined,
+            });
+            setForm({ name: "", description: "", price: "", stock: "1", category_id: "" });
+            load();
+        } catch (err) {
+            setError(err instanceof ApiError ? err.message : "No se pudo crear el producto");
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    return (
+        <section className="card">
+            <h2>Productos</h2>
+            {products?.map((p) => (
+                <ProductRow key={p.id} product={p} onChanged={load} />
+            ))}
+
+            <form onSubmit={handleSubmit} className="inline-form">
+                <input placeholder="Nombre" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} required />
+                <input placeholder="Descripción" value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} />
+                <select value={form.category_id} onChange={(e) => setForm((f) => ({ ...f, category_id: e.target.value }))}>
+                    <option value="">Sin categoría</option>
+                    {categories.map((c) => (
+                        <option key={c.id} value={c.id}>
+                            {c.name}
+                        </option>
+                    ))}
+                </select>
+                <input placeholder="Precio" type="number" min="0" step="0.01" value={form.price} onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))} required />
+                <input placeholder="Inventario" type="number" min="0" value={form.stock} onChange={(e) => setForm((f) => ({ ...f, stock: e.target.value }))} required />
+                <button className="btn btn-primary" type="submit" disabled={loading}>
+                    {loading ? "Agregando..." : "Agregar producto"}
+                </button>
+            </form>
+            {error && <p className="error">{error}</p>}
+        </section>
+    );
+}
+
+function ProductRow({ product, onChanged }: { product: Product; onChanged: () => void }) {
+    const fileInput = useRef<HTMLInputElement>(null);
+    const [uploading, setUploading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setUploading(true);
+        setError(null);
+        try {
+            const formData = new FormData();
+            formData.append("image", file);
+            await api.upload(`/products/${product.id}/images`, formData);
+            onChanged();
+        } catch (err) {
+            setError(err instanceof ApiError ? err.message : "No se pudo subir la imagen");
+        } finally {
+            setUploading(false);
+            if (fileInput.current) fileInput.current.value = "";
+        }
+    }
+
+    async function removeImage(imageId: string) {
+        await api.delete(`/products/${product.id}/images/${imageId}`);
+        onChanged();
+    }
+
+    return (
+        <div className="service-row">
+            <strong>{product.name}</strong> · ${product.price} · {product.stock} en inventario
+            <div className="gallery">
+                {product.images?.map((img) => (
+                    <div key={img.id} className="gallery-item">
+                        <img src={imageUrl(img.url)!} alt="" />
+                        <button className="btn btn-ghost btn-sm" onClick={() => removeImage(img.id)}>
+                            <Trash size={13} /> Quitar
+                        </button>
+                    </div>
+                ))}
+            </div>
+            <input ref={fileInput} type="file" accept="image/*" onChange={handleFileChange} disabled={uploading} />
+            {error && <p className="error">{error}</p>}
+        </div>
+    );
+}
+
+const ORDER_STATUSES: Order["status"][] = ["pendiente", "pagado", "entregado", "cancelado"];
+
+function OrdersManager({ storeId }: { storeId: string }) {
+    const [orders, setOrders] = useState<Order[] | null>(null);
+    const [error, setError] = useState<string | null>(null);
+
+    function load() {
+        api
+            .get<Order[]>(`/stores/${storeId}/orders`)
+            .then(setOrders)
+            .catch((err) => setError(err instanceof ApiError ? err.message : "No se pudieron cargar los pedidos"));
+    }
+
+    useEffect(load, [storeId]);
+
+    async function changeStatus(id: string, status: Order["status"]) {
+        try {
+            await api.patch(`/orders/${id}/status`, { status });
+            load();
+        } catch (err) {
+            setError(err instanceof ApiError ? err.message : "No se pudo actualizar el pedido");
+        }
+    }
+
+    return (
+        <section className="card">
+            <h2>Pedidos</h2>
+            {error && <p className="error">{error}</p>}
+            {!orders ? (
+                <p className="muted">Cargando...</p>
+            ) : orders.length === 0 ? (
+                <p className="muted">Todavía no hay pedidos.</p>
+            ) : (
+                orders.map((o) => (
+                    <div className="appointment-row" key={o.id}>
+                        <span>
+                            {o.items.map((it) => `${it.quantity}× ${it.name}`).join(", ")} · ${o.total_amount} ·{" "}
+                            {o.customer_name || o.customer_email}
+                        </span>
+                        <select value={o.status} onChange={(e) => changeStatus(o.id, e.target.value as Order["status"])}>
+                            {ORDER_STATUSES.map((s) => (
                                 <option key={s} value={s}>
                                     {s}
                                 </option>

@@ -4,7 +4,9 @@ const requireStoreOwner = require("../middlewares/storeOwner");
 const stores = require("../controllers/stores.controller");
 const businessHours = require("../controllers/businessHours.controller");
 const services = require("../controllers/services.controller");
+const products = require("../controllers/products.controller");
 const appointments = require("../controllers/appointments.controller");
+const orders = require("../controllers/orders.controller");
 const reviews = require("../controllers/reviews.controller");
 const { handleUpload } = require("../config/upload");
 
@@ -23,7 +25,11 @@ router.put("/:storeId/business-hours", requireAuth, requireStoreOwner, businessH
 router.get("/:storeId/services", services.listForStore);
 router.post("/:storeId/services", requireAuth, requireStoreOwner, services.create);
 
+router.get("/:storeId/products", products.listForStore);
+router.post("/:storeId/products", requireAuth, requireStoreOwner, products.create);
+
 router.get("/:storeId/appointments", requireAuth, requireStoreOwner, appointments.listForStore);
+router.get("/:storeId/orders", requireAuth, requireStoreOwner, orders.listForStore);
 
 router.get("/:storeId/reviews", reviews.listForStore);
 router.post("/:storeId/reviews", requireAuth, reviews.upsert);

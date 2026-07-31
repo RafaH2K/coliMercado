@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, ApiError } from "../lib/api";
+import { HeartBreak, MapPin } from "@phosphor-icons/react";
+import { api, ApiError, imageUrl } from "../lib/api";
 import type { Store } from "../types";
 
 export default function Favorites() {
@@ -22,25 +23,35 @@ export default function Favorites() {
     }
 
     if (error) return <p className="error">{error}</p>;
-    if (!stores) return <p>Cargando...</p>;
-    if (stores.length === 0) return <p>Todavía no tienes negocios favoritos.</p>;
+    if (!stores) return <p className="muted">Cargando...</p>;
 
     return (
         <div>
             <h1>Mis favoritos</h1>
-            <div className="grid">
-                {stores.map((store) => (
-                    <div className="card" key={store.id}>
-                        <Link to={`/negocios/${store.id}`}>
-                            <h2>{store.name}</h2>
-                        </Link>
-                        {store.city && <p className="muted">{store.city}</p>}
-                        <button className="btn btn-ghost" onClick={() => remove(store.id)}>
-                            Quitar de favoritos
-                        </button>
-                    </div>
-                ))}
-            </div>
+            {stores.length === 0 ? (
+                <p className="muted">Todavía no tienes negocios favoritos.</p>
+            ) : (
+                <div className="grid">
+                    {stores.map((store) => (
+                        <div className="card" key={store.id}>
+                            {store.logo_url && (
+                                <img src={imageUrl(store.logo_url)!} alt="" className="store-logo" />
+                            )}
+                            <Link to={`/negocios/${store.id}`}>
+                                <h3>{store.name}</h3>
+                            </Link>
+                            {store.city && (
+                                <p className="muted" style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                    <MapPin size={13} /> {store.city}
+                                </p>
+                            )}
+                            <button className="btn btn-ghost btn-sm" onClick={() => remove(store.id)}>
+                                <HeartBreak size={14} /> Quitar de favoritos
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            )}
         </div>
     );
 }

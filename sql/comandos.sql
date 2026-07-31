@@ -26,7 +26,12 @@ CREATE TABLE categories (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
     description TEXT,
-    parent_id UUID REFERENCES categories(id)
+    parent_id UUID REFERENCES categories(id),
+    -- 'service' agrupa negocios/servicios reservables (Peluquería, Spa...);
+    -- 'product' agrupa mercancía física del Mercado (Belleza, Hogar...).
+    -- Son taxonomías distintas aunque compartan tabla: category_id en
+    -- products apunta a una u otra según el type del producto.
+    kind TEXT NOT NULL DEFAULT 'service' CHECK (kind IN ('service', 'product'))
 );
 
 
@@ -64,27 +69,32 @@ CREATE TABLE product_images (
 
 CREATE TABLE cart_items (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID REFERENCES users(id),
-    product_id UUID REFERENCES products(id),
+    user_id UUID REFERENCES users(id) NOT NULL,
+    product_id UUID REFERENCES products(id) NOT NULL,
     quantity INT NOT NULL CHECK (quantity > 0),
-    updated_at TIMESTAMP DEFAULT NOW()
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE (user_id, product_id)
 );
 
 
 CREATE TABLE orders (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID REFERENCES users(id),
+    user_id UUID REFERENCES users(id) NOT NULL,
+    store_id UUID REFERENCES stores(id) NOT NULL, -- un pedido = un negocio; un carrito con varias tiendas genera varios pedidos
     total_amount NUMERIC(10,2) NOT NULL,
-    status TEXT CHECK (status IN ('pendiente','pagado','entregado','cancelado')),
+    status TEXT NOT NULL DEFAULT 'pendiente' CHECK (status IN ('pendiente','pagado','entregado','cancelado')),
     created_at TIMESTAMP DEFAULT NOW()
 );
+
+CREATE INDEX idx_orders_user ON orders(user_id);
+CREATE INDEX idx_orders_store ON orders(store_id);
 
 
 CREATE TABLE order_items (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    order_id UUID REFERENCES orders(id) ON DELETE CASCADE,
-    product_id UUID REFERENCES products(id),
-    quantity INT NOT NULL,
+    order_id UUID REFERENCES orders(id) ON DELETE CASCADE NOT NULL,
+    product_id UUID REFERENCES products(id) NOT NULL,
+    quantity INT NOT NULL CHECK (quantity > 0),
     price_at_purchase NUMERIC(10,2) NOT NULL
 );
 
@@ -95,6 +105,7 @@ CREATE TABLE payments (
     amount NUMERIC(10,2),
     provider TEXT,      -- stripe, paypal, efectivo, etc.
     status TEXT,        -- pending, paid, failed
+    stripe_session_id TEXT UNIQUE,
     created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -165,22 +176,31 @@ CREATE TABLE appointments (
     ends_at TIMESTAMPTZ NOT NULL,
     status TEXT NOT NULL DEFAULT 'pendiente'
         CHECK (status IN ('pendiente','confirmada','cancelada','completada','no_asistio')),
+    party_size SMALLINT CHECK (party_size > 0), -- número de personas; útil para reservación de mesas en restaurantes
     notes TEXT,
+    -- Copia de products.capacity al momento de reservar. Necesaria para que
+    -- el EXCLUDE de abajo solo aplique a servicios de un solo cupo — un
+    -- EXCLUDE sin este filtro bloquearía CUALQUIER traslape sin importar
+    -- cuántos cupos tenga el servicio (una mesa con capacidad 3 nunca
+    -- podría tener una segunda reservación en el mismo horario), rompiendo
+    -- por completo el soporte de capacity>1.
+    capacity_snapshot INT NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     CHECK (ends_at > starts_at),
 
-    -- Bloquea a nivel de base de datos dos citas activas que se
-    -- traslapen para el mismo servicio. Cubre el caso capacity=1
-    -- (la mayoría: peluquería, dentista, taller...). Para
-    -- capacity>1 (ej. clase grupal) esta constraint no basta —
-    -- la app debe contar citas activas contra products.capacity
-    -- antes de insertar. Subir a un modelo de recursos/personal
-    -- por cita cuando se implemente gestión de empleados.
+    -- Bloquea a nivel de base de datos dos citas activas que se traslapen
+    -- para el mismo servicio, pero SOLO cuando capacity_snapshot=1 (la
+    -- mayoría: peluquería, dentista, taller...). Para capacity>1 (mesa de
+    -- restaurante, clase grupal) esta constraint no aplica — la app debe
+    -- contar citas activas contra products.capacity antes de insertar
+    -- (bajo un pg_advisory_xact_lock para que sea seguro con concurrencia).
+    -- Subir a un modelo de recursos/personal por cita cuando se implemente
+    -- gestión de empleados.
     EXCLUDE USING gist (
         product_id WITH =,
         tstzrange(starts_at, ends_at) WITH &&
-    ) WHERE (status IN ('pendiente','confirmada'))
+    ) WHERE (status IN ('pendiente','confirmada') AND capacity_snapshot = 1)
 );
 
 CREATE INDEX idx_appointments_customer ON appointments(customer_id);

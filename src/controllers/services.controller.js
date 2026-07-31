@@ -15,7 +15,7 @@ async function search(req, res) {
     const { q, category_id, city } = req.query;
     try {
         const { rows } = await pool.query(
-            `SELECT p.*, s.name AS store_name, s.city AS store_city, s.timezone AS store_timezone
+            `SELECT p.*, s.name AS store_name, s.city AS store_city, s.timezone AS store_timezone, ${IMAGES_SUBQUERY}
              FROM products p JOIN stores s ON s.id = p.store_id
              WHERE p.type = 'service' AND p.is_active = TRUE AND s.is_active = TRUE
                AND ($1::text IS NULL OR p.name ILIKE '%' || $1 || '%' OR p.description ILIKE '%' || $1 || '%')

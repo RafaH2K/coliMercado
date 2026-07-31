@@ -26,6 +26,7 @@ export interface Category {
     name: string;
     description: string | null;
     parent_id: string | null;
+    kind: "service" | "product";
 }
 
 export interface Review {
@@ -58,7 +59,54 @@ export interface Service {
     capacity: number | null;
     is_active: boolean;
     store_timezone?: string;
+    store_name?: string;
     images?: ProductImage[];
+}
+
+export interface Product {
+    id: string;
+    store_id: string;
+    category_id: string | null;
+    name: string;
+    description: string | null;
+    type: "product" | "service";
+    price: string;
+    stock: number | null;
+    is_active: boolean;
+    store_name?: string;
+    store_city?: string;
+    images?: ProductImage[];
+}
+
+export interface CartItem {
+    product_id: string;
+    quantity: number;
+    name: string;
+    price: string;
+    stock: number;
+    store_id: string;
+    store_name: string;
+    image_url: string | null;
+}
+
+export interface OrderItem {
+    product_id: string;
+    name: string;
+    quantity: number;
+    price_at_purchase: string;
+}
+
+export interface Order {
+    id: string;
+    user_id: string;
+    store_id: string;
+    total_amount: string;
+    status: "pendiente" | "pagado" | "entregado" | "cancelado";
+    created_at: string;
+    store_name?: string;
+    customer_name?: string;
+    customer_email?: string;
+    items: OrderItem[];
 }
 
 export interface BusinessHour {
@@ -81,6 +129,7 @@ export interface Appointment {
     ends_at: string;
     status: "pendiente" | "confirmada" | "cancelada" | "completada" | "no_asistio";
     notes: string | null;
+    party_size?: number | null;
     service_name?: string;
     store_id?: string;
     customer_name?: string;

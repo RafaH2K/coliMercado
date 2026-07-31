@@ -3,13 +3,16 @@ const pool = require("../config/db");
 const STATUSES = ["pendiente", "confirmada", "cancelada", "completada", "no_asistio"];
 
 async function create(req, res) {
-    const { product_id, starts_at, notes } = req.body;
+    const { product_id, starts_at, notes, party_size } = req.body;
     if (!product_id || !starts_at) {
         return res.status(400).json({ error: "product_id y starts_at son requeridos" });
     }
     const start = new Date(starts_at);
     if (Number.isNaN(start.getTime()) || start <= new Date()) {
         return res.status(400).json({ error: "starts_at debe ser una fecha válida en el futuro" });
+    }
+    if (party_size !== undefined && party_size !== null && (!Number.isInteger(party_size) || party_size < 1)) {
+        return res.status(400).json({ error: "party_size debe ser un entero positivo" });
     }
 
     const client = await pool.connect();
@@ -29,9 +32,12 @@ async function create(req, res) {
 
         const end = new Date(start.getTime() + service.duration_minutes * 60 * 1000);
 
-        // Serializa reservas concurrentes del mismo servicio: el EXCLUDE
-        // constraint de la tabla solo protege capacity=1, así que el conteo
-        // de abajo necesita este lock para ser confiable con capacity>1.
+        // Serializa reservas concurrentes del mismo servicio. El EXCLUDE
+        // constraint de la tabla solo aplica cuando capacity_snapshot=1
+        // (un EXCLUDE sin ese filtro bloquearía CUALQUIER traslape sin
+        // importar cuántos cupos haya, rompiendo capacity>1 por completo);
+        // para capacity>1 el conteo de abajo es la única protección real,
+        // por eso necesita este lock.
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [product_id]);
 
         const { rows: busyRows } = await client.query(
@@ -46,10 +52,10 @@ async function create(req, res) {
         }
 
         const { rows } = await client.query(
-            `INSERT INTO appointments (product_id, customer_id, starts_at, ends_at, notes)
-             VALUES ($1, $2, $3, $4, $5)
+            `INSERT INTO appointments (product_id, customer_id, starts_at, ends_at, notes, party_size, capacity_snapshot)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
              RETURNING *`,
-            [product_id, req.user.id, start, end, notes || null]
+            [product_id, req.user.id, start, end, notes || null, party_size || null, service.capacity || 1]
         );
 
         await client.query("COMMIT");
