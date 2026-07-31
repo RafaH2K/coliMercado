@@ -1,58 +1,61 @@
 import { useState, type FormEvent } from "react";
-import { useNavigate, Link } from "react-router-dom";
-import { useAuth } from "../lib/auth";
-import { ApiError } from "../lib/api";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { api, ApiError } from "../lib/api";
 
-export default function Login() {
-    const { login } = useAuth();
+export default function ResetPassword() {
+    const [params] = useSearchParams();
     const navigate = useNavigate();
-    const [email, setEmail] = useState("");
+    const token = params.get("token");
+
     const [password, setPassword] = useState("");
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
 
     async function handleSubmit(e: FormEvent) {
         e.preventDefault();
+        if (!token) return;
         setError(null);
         setLoading(true);
         try {
-            await login(email, password);
-            navigate("/");
+            await api.post("/auth/reset-password", { token, password });
+            navigate("/login");
         } catch (err) {
-            setError(err instanceof ApiError ? err.message : "No se pudo iniciar sesión");
+            setError(err instanceof ApiError ? err.message : "No se pudo actualizar la contraseña");
         } finally {
             setLoading(false);
         }
     }
 
+    if (!token) {
+        return (
+            <div className="card form-card">
+                <p className="error">Este enlace no es válido. Solicita uno nuevo.</p>
+                <p>
+                    <Link to="/olvide-password">Volver a solicitar</Link>
+                </p>
+            </div>
+        );
+    }
+
     return (
         <div className="card form-card">
-            <h1>Entrar</h1>
+            <h1>Nueva contraseña</h1>
             <form onSubmit={handleSubmit}>
                 <label className="field">
-                    Email
-                    <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-                </label>
-                <label className="field">
-                    Contraseña
+                    Contraseña nueva
                     <input
                         type="password"
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
+                        minLength={8}
                         required
                     />
                 </label>
                 {error && <p className="error">{error}</p>}
                 <button className="btn btn-primary" type="submit" disabled={loading}>
-                    {loading ? "Entrando..." : "Entrar"}
+                    {loading ? "Guardando..." : "Guardar contraseña"}
                 </button>
             </form>
-            <p>
-                <Link to="/olvide-password">¿Olvidaste tu contraseña?</Link>
-            </p>
-            <p>
-                ¿No tienes cuenta? <Link to="/registro">Regístrate</Link>
-            </p>
         </div>
     );
 }

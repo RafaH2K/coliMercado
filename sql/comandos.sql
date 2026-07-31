@@ -5,6 +5,11 @@ CREATE TABLE users (
     phone TEXT,
     password_hash TEXT NOT NULL,
     is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Recuperación de contraseña: se guarda el hash del token (no el token
+    -- crudo), igual que con la contraseña, para que un dump de la BD no
+    -- alcance para tomar cuentas ajenas. NULL cuando no hay solicitud activa.
+    reset_token_hash TEXT,
+    reset_token_expires TIMESTAMP,
     created_at TIMESTAMP DEFAULT NOW()
 );
 

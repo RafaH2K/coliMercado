@@ -7,6 +7,8 @@ import ServiceDetail from "./pages/ServiceDetail";
 import ProductDetail from "./pages/ProductDetail";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
+import ForgotPassword from "./pages/ForgotPassword";
+import ResetPassword from "./pages/ResetPassword";
 import MyAppointments from "./pages/MyAppointments";
 import Dashboard from "./pages/Dashboard";
 import Favorites from "./pages/Favorites";
@@ -27,6 +29,8 @@ export default function App() {
                 <Route path="/productos/:productId" element={<ProductDetail />} />
                 <Route path="/login" element={<Login />} />
                 <Route path="/registro" element={<Register />} />
+                <Route path="/olvide-password" element={<ForgotPassword />} />
+                <Route path="/restablecer-password" element={<ResetPassword />} />
                 <Route
                     path="/mis-citas"
                     element={
