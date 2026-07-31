@@ -1,21 +1,22 @@
 require("dotenv").config();
 const pool = require("../src/config/db");
 
-async function createUser() {
+async function createUser({ isAdmin = false } = {}) {
     const email = `test_${Date.now()}_${Math.random().toString(36).slice(2)}@example.com`;
     const { rows } = await pool.query(
-        `INSERT INTO users (email, password_hash) VALUES ($1, 'x') RETURNING id`,
-        [email]
+        `INSERT INTO users (email, password_hash, is_admin) VALUES ($1, 'x', $2) RETURNING id`,
+        [email, isAdmin]
     );
     return rows[0].id;
 }
 
-// is_admin_approved = TRUE porque estos fixtures son para probar carrito/
-// pedidos, no el flujo de aprobación en sí (ver admin.test.js para eso).
-async function createStore(ownerId) {
+// is_admin_approved/is_active = TRUE por default porque la mayoría de los
+// fixtures son para probar carrito/pedidos/citas, no el flujo de aprobación
+// en sí (ver admin.test.js, que sí pasa approved: false a propósito).
+async function createStore(ownerId, { approved = true, active = true } = {}) {
     const { rows } = await pool.query(
-        `INSERT INTO stores (owner_id, name, is_admin_approved) VALUES ($1, 'Test Store', TRUE) RETURNING id`,
-        [ownerId]
+        `INSERT INTO stores (owner_id, name, is_admin_approved, is_active) VALUES ($1, 'Test Store', $2, $3) RETURNING id`,
+        [ownerId, approved, active]
     );
     return rows[0].id;
 }
@@ -28,17 +29,44 @@ async function createProduct(storeId, { price = 100, stock = 5 } = {}) {
     return rows[0].id;
 }
 
-// Borra en el orden correcto para respetar las foreign keys.
-async function cleanup({ userId, storeId, productId }) {
-    if (userId) {
-        await pool.query(`DELETE FROM payments WHERE order_id IN (SELECT id FROM orders WHERE user_id = $1)`, [userId]);
-        await pool.query(`DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE user_id = $1)`, [userId]);
-        await pool.query(`DELETE FROM orders WHERE user_id = $1`, [userId]);
-        await pool.query(`DELETE FROM cart_items WHERE user_id = $1`, [userId]);
+async function createService(storeId, { price = 100, duration_minutes = 30, capacity = 1 } = {}) {
+    const { rows } = await pool.query(
+        `INSERT INTO products (store_id, name, type, price, duration_minutes, capacity)
+         VALUES ($1, 'Test Service', 'service', $2, $3, $4) RETURNING id`,
+        [storeId, price, duration_minutes, capacity]
+    );
+    return rows[0].id;
+}
+
+// Cada campo acepta un id suelto o un arreglo. Borra en el orden correcto
+// para respetar las foreign keys.
+async function cleanup({ userId, storeId, productId } = {}) {
+    const userIds = [].concat(userId || []);
+    const storeIds = [].concat(storeId || []);
+    const productIds = [].concat(productId || []);
+
+    if (userIds.length) {
+        await pool.query(`DELETE FROM payments WHERE order_id IN (SELECT id FROM orders WHERE user_id = ANY($1))`, [userIds]);
+        await pool.query(`DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE user_id = ANY($1))`, [userIds]);
+        await pool.query(`DELETE FROM orders WHERE user_id = ANY($1)`, [userIds]);
+        await pool.query(`DELETE FROM cart_items WHERE user_id = ANY($1)`, [userIds]);
+        await pool.query(`DELETE FROM appointments WHERE customer_id = ANY($1)`, [userIds]);
     }
-    if (productId) await pool.query(`DELETE FROM products WHERE id = $1`, [productId]);
-    if (storeId) await pool.query(`DELETE FROM stores WHERE id = $1`, [storeId]);
-    if (userId) await pool.query(`DELETE FROM users WHERE id = $1`, [userId]);
+    if (productIds.length) {
+        await pool.query(`DELETE FROM appointments WHERE product_id = ANY($1)`, [productIds]);
+        await pool.query(`DELETE FROM products WHERE id = ANY($1)`, [productIds]);
+    }
+    if (storeIds.length) {
+        await pool.query(
+            `DELETE FROM appointments WHERE product_id IN (SELECT id FROM products WHERE store_id = ANY($1))`,
+            [storeIds]
+        );
+        await pool.query(`DELETE FROM products WHERE store_id = ANY($1)`, [storeIds]);
+        await pool.query(`DELETE FROM stores WHERE id = ANY($1)`, [storeIds]);
+    }
+    if (userIds.length) {
+        await pool.query(`DELETE FROM users WHERE id = ANY($1)`, [userIds]);
+    }
 }
 
 function mockRes() {
@@ -49,4 +77,4 @@ function mockRes() {
     return res;
 }
 
-module.exports = { pool, createUser, createStore, createProduct, cleanup, mockRes };
+module.exports = { pool, createUser, createStore, createProduct, createService, cleanup, mockRes };
