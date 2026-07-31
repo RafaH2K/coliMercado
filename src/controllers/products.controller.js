@@ -17,7 +17,7 @@ async function search(req, res) {
         const { rows } = await pool.query(
             `SELECT p.*, s.name AS store_name, s.city AS store_city, ${IMAGES_SUBQUERY}
              FROM products p JOIN stores s ON s.id = p.store_id
-             WHERE p.type = 'product' AND p.is_active = TRUE AND s.is_active = TRUE
+             WHERE p.type = 'product' AND p.is_active = TRUE AND s.is_active = TRUE AND s.is_admin_approved = TRUE
                AND ($1::text IS NULL OR p.name ILIKE '%' || $1 || '%' OR p.description ILIKE '%' || $1 || '%')
                AND ($2::uuid IS NULL OR p.category_id = $2)
                AND ($3::text IS NULL OR s.city ILIKE '%' || $3 || '%')
@@ -79,7 +79,7 @@ async function getById(req, res) {
         const { rows } = await pool.query(
             `SELECT p.*, s.name AS store_name, s.city AS store_city, ${IMAGES_SUBQUERY}
              FROM products p JOIN stores s ON s.id = p.store_id
-             WHERE p.id = $1 AND p.type = 'product' AND s.is_active = TRUE`,
+             WHERE p.id = $1 AND p.type = 'product' AND s.is_active = TRUE AND s.is_admin_approved = TRUE`,
             [req.params.id]
         );
         if (!rows[0]) return res.status(404).json({ error: "Producto no encontrado" });

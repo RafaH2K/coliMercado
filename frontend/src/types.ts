@@ -28,6 +28,7 @@ export interface PendingStore {
     description: string | null;
     city: string | null;
     phone: string | null;
+    is_active: boolean;
     created_at: string;
     owner_name: string | null;
     owner_email: string;

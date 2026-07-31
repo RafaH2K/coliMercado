@@ -7,7 +7,9 @@ const router = Router();
 
 router.use(requireAuth, requireAdmin);
 router.get("/stores/pending", admin.listPendingStores);
+router.get("/stores/approved", admin.listApprovedStores);
 router.post("/stores/:id/approve", admin.approveStore);
 router.delete("/stores/:id", admin.rejectStore);
+router.patch("/stores/:id/active", admin.setActive);
 
 module.exports = router;

@@ -10,9 +10,11 @@ async function createUser() {
     return rows[0].id;
 }
 
+// is_admin_approved = TRUE porque estos fixtures son para probar carrito/
+// pedidos, no el flujo de aprobación en sí (ver admin.test.js para eso).
 async function createStore(ownerId) {
     const { rows } = await pool.query(
-        `INSERT INTO stores (owner_id, name) VALUES ($1, 'Test Store') RETURNING id`,
+        `INSERT INTO stores (owner_id, name, is_admin_approved) VALUES ($1, 'Test Store', TRUE) RETURNING id`,
         [ownerId]
     );
     return rows[0].id;

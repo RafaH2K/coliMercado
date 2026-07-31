@@ -18,10 +18,13 @@ CREATE TABLE stores (
     phone TEXT, -- contacto del negocio (llamada/WhatsApp), independiente del teléfono personal del dueño
     city TEXT, -- texto libre para búsqueda por ubicación; geo real (lat/lng) queda para cuando haya multiciudad de verdad
     timezone TEXT NOT NULL DEFAULT 'America/Mexico_City', -- nombre IANA; da sentido a business_hours/special_dates
-    -- Controlado solo por un admin (ver admin.controller.js), no por el dueño:
-    -- FALSE = pendiente de aprobación (oculto de todo lo público, el dueño sí
-    -- puede seguir preparando su negocio desde el dashboard).
+    -- Dos banderas separadas a propósito (ver admin.controller.js), ninguna
+    -- editable por el dueño: is_admin_approved solo pasa de FALSE a TRUE una
+    -- vez (aprobación); is_active la puede alternar el admin después para
+    -- suspender/reactivar un negocio YA aprobado. Si fuera una sola bandera,
+    -- suspender un negocio activo lo haría reaparecer como "pendiente".
     is_active BOOLEAN DEFAULT TRUE,
+    is_admin_approved BOOLEAN NOT NULL DEFAULT FALSE,
     page_views INT NOT NULL DEFAULT 0, -- contador simple, incrementado en cada GET /stores/:id público
     created_at TIMESTAMP DEFAULT NOW()
 );

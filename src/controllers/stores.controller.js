@@ -13,12 +13,12 @@ async function create(req, res) {
         return res.status(400).json({ error: "timezone debe ser una zona IANA válida (ej. America/Mexico_City)" });
     }
     try {
-        // Todo negocio nuevo nace pendiente de aprobación (is_active = FALSE):
-        // no aparece en el mercado ni es accesible públicamente hasta que un
-        // admin lo aprueba (ver admin.controller.js). El dueño sí puede
+        // Todo negocio nuevo nace pendiente de aprobación (is_admin_approved =
+        // FALSE): no aparece en el mercado ni es accesible públicamente hasta
+        // que un admin lo aprueba (ver admin.controller.js). El dueño sí puede
         // preparar su negocio desde el dashboard mientras tanto.
         const { rows } = await pool.query(
-            `INSERT INTO stores (owner_id, name, description, logo_url, timezone, city, phone, is_active)
+            `INSERT INTO stores (owner_id, name, description, logo_url, timezone, city, phone, is_admin_approved)
              VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE) RETURNING *`,
             [
                 req.user.id,
@@ -68,7 +68,7 @@ async function list(req, res) {
             `SELECT s.*, COALESCE(r.avg_rating, 0) AS avg_rating, COALESCE(r.review_count, 0) AS review_count
              FROM stores s
              ${RATING_JOIN}
-             WHERE s.is_active = TRUE
+             WHERE s.is_active = TRUE AND s.is_admin_approved = TRUE
                AND ($1::text IS NULL OR s.name ILIKE '%' || $1 || '%' OR s.description ILIKE '%' || $1 || '%')
                AND ($2::uuid IS NULL OR EXISTS (
                    SELECT 1 FROM products p WHERE p.store_id = s.id AND p.category_id = $2 AND p.is_active = TRUE
@@ -92,7 +92,8 @@ async function getById(req, res) {
         // deduplicar por visitante ni desglose por fecha); si más adelante
         // hace falta una serie de tiempo, esto se sube a una tabla de eventos.
         const { rows: updated } = await pool.query(
-            `UPDATE stores SET page_views = page_views + 1 WHERE id = $1 AND is_active = TRUE RETURNING id`,
+            `UPDATE stores SET page_views = page_views + 1
+             WHERE id = $1 AND is_active = TRUE AND is_admin_approved = TRUE RETURNING id`,
             [req.params.storeId]
         );
         if (!updated[0]) return res.status(404).json({ error: "Negocio no encontrado" });

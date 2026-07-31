@@ -3,24 +3,36 @@ import { api, ApiError } from "../lib/api";
 import type { PendingStore } from "../types";
 
 export default function Admin() {
-    const [stores, setStores] = useState<PendingStore[] | null>(null);
+    const [pending, setPending] = useState<PendingStore[] | null>(null);
+    const [approved, setApproved] = useState<PendingStore[] | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [busyId, setBusyId] = useState<string | null>(null);
 
-    function load() {
+    function loadPending() {
         api
             .get<PendingStore[]>("/admin/stores/pending")
-            .then(setStores)
+            .then(setPending)
             .catch((err) => setError(err instanceof ApiError ? err.message : "No se pudo cargar la lista"));
     }
 
-    useEffect(load, []);
+    function loadApproved() {
+        api
+            .get<PendingStore[]>("/admin/stores/approved")
+            .then(setApproved)
+            .catch((err) => setError(err instanceof ApiError ? err.message : "No se pudo cargar la lista"));
+    }
+
+    useEffect(() => {
+        loadPending();
+        loadApproved();
+    }, []);
 
     async function approve(id: string) {
         setBusyId(id);
         try {
             await api.post(`/admin/stores/${id}/approve`);
-            load();
+            loadPending();
+            loadApproved();
         } catch (err) {
             setError(err instanceof ApiError ? err.message : "No se pudo aprobar el negocio");
         } finally {
@@ -33,7 +45,7 @@ export default function Admin() {
         setBusyId(id);
         try {
             await api.delete(`/admin/stores/${id}`);
-            load();
+            loadPending();
         } catch (err) {
             setError(err instanceof ApiError ? err.message : "No se pudo rechazar el negocio");
         } finally {
@@ -41,23 +53,36 @@ export default function Admin() {
         }
     }
 
-    if (error && !stores) return <p className="error">{error}</p>;
-    if (!stores) return <p className="muted">Cargando...</p>;
+    async function setActive(id: string, is_active: boolean) {
+        setBusyId(id);
+        try {
+            await api.patch(`/admin/stores/${id}/active`, { is_active });
+            loadApproved();
+        } catch (err) {
+            setError(err instanceof ApiError ? err.message : "No se pudo actualizar el negocio");
+        } finally {
+            setBusyId(null);
+        }
+    }
+
+    if (error && !pending && !approved) return <p className="error">{error}</p>;
+    if (!pending || !approved) return <p className="muted">Cargando...</p>;
 
     return (
         <div>
             <div className="page-header">
-                <h1>Negocios pendientes de aprobación</h1>
-                <p>Estos negocios no aparecen en el mercado hasta que los apruebes.</p>
+                <h1>Administración de negocios</h1>
             </div>
 
             {error && <p className="error">{error}</p>}
 
-            {stores.length === 0 ? (
+            <h2>Pendientes de aprobación</h2>
+            <p className="muted">Estos negocios no aparecen en el mercado hasta que los apruebes.</p>
+            {pending.length === 0 ? (
                 <p className="muted">No hay negocios pendientes.</p>
             ) : (
                 <div className="card-stack">
-                    {stores.map((s) => (
+                    {pending.map((s) => (
                         <div className="card" key={s.id}>
                             <h3>{s.name}</h3>
                             <p className="muted">
@@ -72,6 +97,38 @@ export default function Admin() {
                                 <button className="btn btn-ghost" onClick={() => reject(s.id)} disabled={busyId === s.id}>
                                     Rechazar
                                 </button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            <h2 style={{ marginTop: 32 }}>Negocios aprobados</h2>
+            <p className="muted">Suspende un negocio si necesitas quitarlo temporalmente del mercado.</p>
+            {approved.length === 0 ? (
+                <p className="muted">Todavía no hay negocios aprobados.</p>
+            ) : (
+                <div className="card-stack">
+                    {approved.map((s) => (
+                        <div className="card" key={s.id}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                <h3>{s.name}</h3>
+                                {!s.is_active && <span className="badge badge-cancelada">Suspendido</span>}
+                            </div>
+                            <p className="muted">
+                                {s.owner_name || s.owner_email} · {s.owner_email}
+                                {s.city ? ` · ${s.city}` : ""}
+                            </p>
+                            <div className="inline-form">
+                                {s.is_active ? (
+                                    <button className="btn btn-ghost" onClick={() => setActive(s.id, false)} disabled={busyId === s.id}>
+                                        Suspender
+                                    </button>
+                                ) : (
+                                    <button className="btn btn-primary" onClick={() => setActive(s.id, true)} disabled={busyId === s.id}>
+                                        Reactivar
+                                    </button>
+                                )}
                             </div>
                         </div>
                     ))}
