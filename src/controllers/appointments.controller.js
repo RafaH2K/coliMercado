@@ -176,6 +176,15 @@ async function create(req, res) {
     // el cobro. Si Stripe falla, se borra el hold para no dejar el horario
     // bloqueado 10 minutos por nada.
     try {
+        // Stripe rechaza cobros menores a $10.00 MXN (ver
+        // services.controller.js#STRIPE_MXN_MINIMUM, que ya evita configurar
+        // un anticipo así de chico; esto solo cubre datos de antes de ese fix).
+        if (Math.round(Number(service.deposit_amount) * 100) < 1000) {
+            await pool.query(`DELETE FROM appointments WHERE id = $1 AND status = 'pendiente_pago'`, [appointment.id]);
+            return res.status(500).json({
+                error: "El anticipo configurado para este servicio es menor al mínimo que permite Stripe ($10.00 MXN). Avísale al negocio para que lo corrija.",
+            });
+        }
         const frontend = frontendUrl();
         const session = await stripe.checkout.sessions.create({
             mode: "payment",

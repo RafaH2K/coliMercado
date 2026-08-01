@@ -86,6 +86,30 @@ test("createCheckoutSession: cobra el precio con el recargo del 12% por tarjeta"
     assert.equal(sessionArgs.line_items[0].quantity, 2);
 });
 
+test("createCheckoutSession: carrito por debajo del mínimo de Stripe ($10 MXN) responde 400 sin llamar a Stripe", async (t) => {
+    const userId = await createUser();
+    const storeId = await createStore(userId);
+    const productId = await createProduct(storeId, { price: 5, stock: 5 });
+    await pool.query(`INSERT INTO cart_items (user_id, product_id, quantity) VALUES ($1, $2, 1)`, [userId, productId]);
+    t.after(() => cleanup({ userId, storeId, productId }));
+
+    const originalCreate = stripe.checkout.sessions.create;
+    let called = false;
+    stripe.checkout.sessions.create = async () => {
+        called = true;
+        return { url: "https://checkout.stripe.test/fake" };
+    };
+    t.after(() => {
+        stripe.checkout.sessions.create = originalCreate;
+    });
+
+    const res = mockRes();
+    await orders.createCheckoutSession({ user: { id: userId } }, res);
+
+    assert.equal(res.statusCode, 400);
+    assert.equal(called, false, "no debió ni intentar llamar a Stripe");
+});
+
 test("confirmStripeSession: pago ya pagado con inventario agotado se reembolsa automáticamente", async (t) => {
     const userId = await createUser();
     const storeId = await createStore(userId);

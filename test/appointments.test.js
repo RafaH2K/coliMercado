@@ -157,6 +157,38 @@ test("create: servicio con anticipo en negocio Pro inicia el cobro en vez de con
     assert.equal(rows[0].deposit_amount, "100.00");
 });
 
+test("create: servicio con anticipo por debajo del mínimo de Stripe ($10 MXN) responde error y libera el hold", async (t) => {
+    const ownerId = await createUser();
+    const storeId = await createStore(ownerId, { approved: true });
+    await makeStorePro(storeId);
+    // deposit_amount=5 viene directo de fixtures (bypasa la validación del
+    // controller) para simular datos de antes de ese fix.
+    const serviceId = await createService(storeId, { duration_minutes: 30, deposit_amount: 5 });
+    const customerId = await createUser();
+    t.after(() => cleanup({ userId: [ownerId, customerId], storeId }));
+
+    const originalCreate = stripe.checkout.sessions.create;
+    let called = false;
+    stripe.checkout.sessions.create = async () => {
+        called = true;
+        return { url: "https://checkout.stripe.test/fake" };
+    };
+    t.after(() => {
+        stripe.checkout.sessions.create = originalCreate;
+    });
+
+    const res = mockRes();
+    await appointments.create(
+        { user: { id: customerId }, body: { product_id: serviceId, starts_at: inHours(24) } },
+        res
+    );
+
+    assert.equal(res.statusCode, 500);
+    assert.equal(called, false, "no debió ni intentar llamar a Stripe");
+    const { rows } = await pool.query(`SELECT status FROM appointments WHERE product_id = $1`, [serviceId]);
+    assert.equal(rows.length, 0, "el hold pendiente_pago debió liberarse");
+});
+
 test("create: servicio con anticipo en negocio SIN Pro ignora el anticipo (reserva directa)", async (t) => {
     const ownerId = await createUser();
     const storeId = await createStore(ownerId, { approved: true });

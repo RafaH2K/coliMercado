@@ -42,6 +42,11 @@ const ITEMS_SUBQUERY = `
 // siguen calculándose sobre products.price sin este recargo, así que al
 // negocio no le cambia nada de lo que ve ni de lo que se le reporta.
 const STRIPE_CARD_SURCHARGE = 1.12;
+// Stripe rechaza cualquier Checkout Session cuyo total sea menor a esto para
+// MXN (https://stripe.com/docs/currencies#minimum-and-maximum-charge-amounts).
+// Sin este chequeo, un carrito chico truena en Stripe con un 500 genérico en
+// vez de decirle al cliente por qué no puede pagar con tarjeta.
+const STRIPE_MXN_MINIMUM_CENTS = 1000;
 
 class CheckoutError extends Error {
     constructor(status, message) {
@@ -161,23 +166,33 @@ async function createCheckoutSession(req, res) {
             return res.status(409).json({ error: "Un producto de tu carrito ya no está disponible" });
         }
 
+        const lineItems = cartRows.map((item) => ({
+            quantity: item.quantity,
+            price_data: {
+                currency: "mxn",
+                unit_amount: Math.round(Number(item.price) * 100 * STRIPE_CARD_SURCHARGE),
+                product_data: { name: item.name },
+            },
+        }));
+        const total = lineItems.reduce((sum, li) => sum + li.price_data.unit_amount * li.quantity, 0);
+        if (total < STRIPE_MXN_MINIMUM_CENTS) {
+            throw new CheckoutError(
+                400,
+                `El total de tu carrito debe ser de al menos $${(STRIPE_MXN_MINIMUM_CENTS / 100).toFixed(2)} MXN para pagar con tarjeta. Agrega más productos o paga en persona con el negocio.`
+            );
+        }
+
         const frontend = frontendUrl();
         const session = await stripe.checkout.sessions.create({
             mode: "payment",
-            line_items: cartRows.map((item) => ({
-                quantity: item.quantity,
-                price_data: {
-                    currency: "mxn",
-                    unit_amount: Math.round(Number(item.price) * 100 * STRIPE_CARD_SURCHARGE),
-                    product_data: { name: item.name },
-                },
-            })),
+            line_items: lineItems,
             metadata: { user_id: req.user.id },
             success_url: `${frontend}/carrito/exito?session_id={CHECKOUT_SESSION_ID}`,
             cancel_url: `${frontend}/carrito`,
         });
         res.json({ url: session.url });
     } catch (err) {
+        if (err instanceof CheckoutError) return res.status(err.status).json({ error: err.message });
         console.error("orders.createCheckoutSession error:", err.message);
         res.status(500).json({ error: "Error interno del servidor" });
     }

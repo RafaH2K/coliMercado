@@ -56,6 +56,20 @@ test("create: rechaza deposit_amount negativo", async (t) => {
     assert.equal(res.statusCode, 400);
 });
 
+test("create: rechaza deposit_amount positivo pero menor al mínimo de Stripe ($10 MXN)", async (t) => {
+    const ownerId = await createUser();
+    const storeId = await createStore(ownerId);
+    t.after(() => cleanup({ userId: ownerId, storeId }));
+
+    const res = mockRes();
+    await services.create(
+        { store: { id: storeId }, body: { name: "Corte", price: 150, duration_minutes: 30, deposit_amount: 5 } },
+        res
+    );
+
+    assert.equal(res.statusCode, 400);
+});
+
 test("create: acepta deposit_amount 0 o positivo", async (t) => {
     const ownerId = await createUser();
     const storeId = await createStore(ownerId);
@@ -173,6 +187,18 @@ test("update: rechaza deposit_amount negativo", async (t) => {
 
     const res = mockRes();
     await services.update({ service: { id: serviceId }, body: { deposit_amount: -5 } }, res);
+
+    assert.equal(res.statusCode, 400);
+});
+
+test("update: rechaza deposit_amount positivo pero menor al mínimo de Stripe ($10 MXN)", async (t) => {
+    const ownerId = await createUser();
+    const storeId = await createStore(ownerId);
+    const serviceId = await createService(storeId);
+    t.after(() => cleanup({ userId: ownerId, storeId, productId: serviceId }));
+
+    const res = mockRes();
+    await services.update({ service: { id: serviceId }, body: { deposit_amount: 3 } }, res);
 
     assert.equal(res.statusCode, 400);
 });

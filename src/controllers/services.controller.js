@@ -13,6 +13,18 @@ const IMAGES_SUBQUERY = `
 
 const PAGE_SIZE = 24;
 
+// Stripe rechaza cobros menores a $10.00 MXN (mismo límite que
+// orders.controller.js#STRIPE_MXN_MINIMUM_CENTS). Se valida aquí, al
+// configurar el servicio, para que el dueño se entere al momento en vez de
+// que un cliente tope con un error de Stripe al intentar reservar y pagar.
+const STRIPE_MXN_MINIMUM = 10;
+
+function validDepositAmount(deposit_amount) {
+    if (deposit_amount === undefined || deposit_amount === null) return true;
+    const amount = Number(deposit_amount);
+    return amount === 0 || amount >= STRIPE_MXN_MINIMUM;
+}
+
 async function search(req, res) {
     const { q, category_id, city, page } = req.query;
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
@@ -63,8 +75,10 @@ async function create(req, res) {
     if (!Number.isInteger(duration_minutes) || duration_minutes <= 0) {
         return res.status(400).json({ error: "duration_minutes debe ser un entero positivo (minutos)" });
     }
-    if (deposit_amount !== undefined && deposit_amount !== null && !(Number(deposit_amount) >= 0)) {
-        return res.status(400).json({ error: "deposit_amount debe ser un número mayor o igual a 0" });
+    if (!validDepositAmount(deposit_amount)) {
+        return res.status(400).json({
+            error: `deposit_amount debe ser 0 (sin anticipo) o al menos $${STRIPE_MXN_MINIMUM}.00 MXN — Stripe no permite cobros menores a eso`,
+        });
     }
 
     try {
@@ -130,8 +144,10 @@ async function update(req, res) {
     if (duration_minutes !== undefined && (!Number.isInteger(duration_minutes) || duration_minutes <= 0)) {
         return res.status(400).json({ error: "duration_minutes debe ser un entero positivo (minutos)" });
     }
-    if (deposit_amount !== undefined && deposit_amount !== null && !(Number(deposit_amount) >= 0)) {
-        return res.status(400).json({ error: "deposit_amount debe ser un número mayor o igual a 0" });
+    if (!validDepositAmount(deposit_amount)) {
+        return res.status(400).json({
+            error: `deposit_amount debe ser 0 (sin anticipo) o al menos $${STRIPE_MXN_MINIMUM}.00 MXN — Stripe no permite cobros menores a eso`,
+        });
     }
     try {
         const { rows } = await pool.query(
