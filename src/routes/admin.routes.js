@@ -11,5 +11,6 @@ router.get("/stores/approved", admin.listApprovedStores);
 router.post("/stores/:id/approve", admin.approveStore);
 router.delete("/stores/:id", admin.rejectStore);
 router.patch("/stores/:id/active", admin.setActive);
+router.delete("/stores/:id/purge", admin.purgeStore);
 
 module.exports = router;

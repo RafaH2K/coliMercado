@@ -1,4 +1,6 @@
 const pool = require("../config/db");
+const stripe = require("../config/stripe");
+const storage = require("../lib/storage");
 const { sendEmail } = require("../config/email");
 
 // Fire-and-forget: un correo que falla no debe tumbar la aprobación.
@@ -111,4 +113,69 @@ async function setActive(req, res) {
     }
 }
 
-module.exports = { listPendingStores, listApprovedStores, approveStore, rejectStore, setActive };
+// Elimina un negocio YA aprobado con todo su contenido (a diferencia de
+// rejectStore, que solo borra pendientes sin contenido y truena si hay FK).
+// products/orders no tienen ON DELETE CASCADE hacia stores, y payments/
+// cart_items/appointments tampoco lo tienen hacia orders/products, así que
+// hay que borrar en orden manualmente dentro de una transacción; lo demás
+// (business_hours, reviews, favorites, product_images...) sí cascadea solo.
+async function purgeStore(req, res) {
+    const storeId = req.params.id;
+    try {
+        const { rows: storeRows } = await pool.query(
+            `SELECT logo_url, stripe_subscription_id FROM stores WHERE id = $1`,
+            [storeId]
+        );
+        const store = storeRows[0];
+        if (!store) return res.status(404).json({ error: "Negocio no encontrado" });
+
+        const { rows: imageRows } = await pool.query(
+            `SELECT pi.url FROM product_images pi JOIN products p ON p.id = pi.product_id WHERE p.store_id = $1`,
+            [storeId]
+        );
+        const imageUrls = imageRows.map((r) => r.url);
+        if (store.logo_url) imageUrls.push(store.logo_url);
+
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            await client.query(
+                `DELETE FROM payments WHERE order_id IN (SELECT id FROM orders WHERE store_id = $1)`,
+                [storeId]
+            );
+            await client.query(
+                `DELETE FROM appointments WHERE product_id IN (SELECT id FROM products WHERE store_id = $1)`,
+                [storeId]
+            );
+            await client.query(
+                `DELETE FROM cart_items WHERE product_id IN (SELECT id FROM products WHERE store_id = $1)`,
+                [storeId]
+            );
+            await client.query(`DELETE FROM orders WHERE store_id = $1`, [storeId]); // cascadea order_items y messages
+            await client.query(`DELETE FROM products WHERE store_id = $1`, [storeId]); // cascadea product_images
+            await client.query(`DELETE FROM stores WHERE id = $1`, [storeId]); // cascadea business_hours/special_dates/blocked_slots/favorites/reviews
+            await client.query("COMMIT");
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
+
+        if (store.stripe_subscription_id) {
+            try {
+                await stripe.subscriptions.cancel(store.stripe_subscription_id);
+            } catch (err) {
+                console.error("admin.purgeStore: no se pudo cancelar la suscripción:", err.message);
+            }
+        }
+        imageUrls.forEach((url) => storage.deleteImage(url));
+
+        res.status(204).send();
+    } catch (err) {
+        console.error("admin.purgeStore error:", err.message);
+        res.status(500).json({ error: "Error interno del servidor" });
+    }
+}
+
+module.exports = { listPendingStores, listApprovedStores, approveStore, rejectStore, setActive, purgeStore };

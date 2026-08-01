@@ -65,6 +65,24 @@ export default function Admin() {
         }
     }
 
+    async function purgeStore(id: string, name: string) {
+        if (
+            !confirm(
+                `Esto elimina "${name}" PARA SIEMPRE: productos, servicios, pedidos, citas, reseñas, horario e imágenes. No se puede deshacer. ¿Continuar?`
+            )
+        )
+            return;
+        setBusyId(id);
+        try {
+            await api.delete(`/admin/stores/${id}/purge`);
+            loadApproved();
+        } catch (err) {
+            setError(err instanceof ApiError ? err.message : "No se pudo eliminar el negocio");
+        } finally {
+            setBusyId(null);
+        }
+    }
+
     if (error && !pending && !approved) return <p className="error">{error}</p>;
     if (!pending || !approved) return <p className="muted">Cargando...</p>;
 
@@ -129,6 +147,14 @@ export default function Admin() {
                                         Reactivar
                                     </button>
                                 )}
+                                <button
+                                    className="btn btn-ghost"
+                                    style={{ color: "var(--danger)" }}
+                                    onClick={() => purgeStore(s.id, s.name)}
+                                    disabled={busyId === s.id}
+                                >
+                                    Eliminar
+                                </button>
                             </div>
                         </div>
                     ))}

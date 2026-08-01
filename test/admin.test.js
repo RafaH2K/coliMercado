@@ -1,9 +1,11 @@
 const test = require("node:test");
 const { after } = test;
 const assert = require("node:assert/strict");
-const { pool, createUser, createStore, createProduct, cleanup, mockRes } = require("./fixtures");
+const { pool, createUser, createStore, createProduct, createService, cleanup, mockRes } = require("./fixtures");
 const requireAdmin = require("../src/middlewares/admin");
 const admin = require("../src/controllers/admin.controller");
+const storage = require("../src/lib/storage");
+const stripe = require("../src/config/stripe");
 
 test("requireAdmin rechaza a un usuario que no es admin", async (t) => {
     const userId = await createUser();
@@ -124,6 +126,119 @@ test("rejectStore en un negocio pendiente CON productos responde 409 y no lo bor
 
     const { rows } = await pool.query(`SELECT id FROM stores WHERE id = $1`, [storeId]);
     assert.equal(rows.length, 1, "el negocio con contenido no debió borrarse");
+});
+
+test("purgeStore: negocio inexistente responde 404", async (t) => {
+    const res = mockRes();
+    await admin.purgeStore({ params: { id: "00000000-0000-0000-0000-000000000000" } }, res);
+    assert.equal(res.statusCode, 404);
+});
+
+test("purgeStore: borra el negocio y TODO su contenido, y manda a borrar cada imagen del bucket", async (t) => {
+    const ownerId = await createUser();
+    const customerId = await createUser();
+    const storeId = await createStore(ownerId, { approved: true });
+    t.after(() => cleanup({ userId: [ownerId, customerId] })); // el store ya debería quedar borrado por purgeStore
+
+    await pool.query(`UPDATE stores SET logo_url = $1 WHERE id = $2`, [
+        "https://xxx.supabase.co/storage/v1/object/public/uploads/logo.jpg",
+        storeId,
+    ]);
+
+    const productId = await createProduct(storeId);
+    const serviceId = await createService(storeId);
+    await pool.query(`INSERT INTO product_images (product_id, url) VALUES ($1, $2), ($1, $3)`, [
+        productId,
+        "https://xxx.supabase.co/storage/v1/object/public/uploads/foto1.jpg",
+        "https://xxx.supabase.co/storage/v1/object/public/uploads/foto2.jpg",
+    ]);
+
+    const { rows: orderRows } = await pool.query(
+        `INSERT INTO orders (user_id, store_id, total_amount, status) VALUES ($1, $2, 100, 'pagado') RETURNING id`,
+        [customerId, storeId]
+    );
+    const orderId = orderRows[0].id;
+    await pool.query(
+        `INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase) VALUES ($1, $2, 1, 100)`,
+        [orderId, productId]
+    );
+    await pool.query(
+        `INSERT INTO payments (order_id, amount, provider, status, stripe_session_id) VALUES ($1, 100, 'stripe', 'pagado', 'cs_test_purge')`,
+        [orderId]
+    );
+    await pool.query(`INSERT INTO cart_items (user_id, product_id, quantity) VALUES ($1, $2, 1)`, [customerId, productId]);
+    await pool.query(
+        `INSERT INTO appointments (product_id, customer_id, starts_at, ends_at, status)
+         VALUES ($1, $2, NOW() + interval '1 day', NOW() + interval '1 day 30 minutes', 'confirmada')`,
+        [serviceId, customerId]
+    );
+    await pool.query(`INSERT INTO reviews (store_id, user_id, rating) VALUES ($1, $2, 5)`, [storeId, customerId]);
+    await pool.query(`INSERT INTO favorites (user_id, store_id) VALUES ($1, $2)`, [customerId, storeId]);
+    await pool.query(
+        `INSERT INTO business_hours (store_id, day_of_week, start_time, end_time) VALUES ($1, 1, '09:00', '18:00')`,
+        [storeId]
+    );
+
+    const deletedUrls = [];
+    const originalDeleteImage = storage.deleteImage;
+    storage.deleteImage = (url) => deletedUrls.push(url);
+    t.after(() => {
+        storage.deleteImage = originalDeleteImage;
+    });
+
+    const res = mockRes();
+    await admin.purgeStore({ params: { id: storeId } }, res);
+
+    assert.equal(res.statusCode, 204);
+    assert.equal(deletedUrls.length, 3, "debió mandar a borrar el logo + las 2 imágenes de producto");
+
+    const { rows: storeRows } = await pool.query(`SELECT id FROM stores WHERE id = $1`, [storeId]);
+    assert.equal(storeRows.length, 0);
+    const { rows: productRows } = await pool.query(`SELECT id FROM products WHERE store_id = $1`, [storeId]);
+    assert.equal(productRows.length, 0);
+    const { rows: imageRows } = await pool.query(`SELECT id FROM product_images WHERE product_id = ANY($1)`, [
+        [productId, serviceId],
+    ]);
+    assert.equal(imageRows.length, 0);
+    const { rows: orderRowsAfter } = await pool.query(`SELECT id FROM orders WHERE id = $1`, [orderId]);
+    assert.equal(orderRowsAfter.length, 0);
+    const { rows: orderItemRows } = await pool.query(`SELECT id FROM order_items WHERE order_id = $1`, [orderId]);
+    assert.equal(orderItemRows.length, 0);
+    const { rows: paymentRows } = await pool.query(`SELECT id FROM payments WHERE order_id = $1`, [orderId]);
+    assert.equal(paymentRows.length, 0);
+    const { rows: cartRows } = await pool.query(`SELECT id FROM cart_items WHERE user_id = $1`, [customerId]);
+    assert.equal(cartRows.length, 0);
+    const { rows: appointmentRows } = await pool.query(`SELECT id FROM appointments WHERE product_id = $1`, [serviceId]);
+    assert.equal(appointmentRows.length, 0);
+    const { rows: reviewRows } = await pool.query(`SELECT id FROM reviews WHERE store_id = $1`, [storeId]);
+    assert.equal(reviewRows.length, 0);
+    const { rows: favoriteRows } = await pool.query(`SELECT id FROM favorites WHERE store_id = $1`, [storeId]);
+    assert.equal(favoriteRows.length, 0);
+    const { rows: hoursRows } = await pool.query(`SELECT id FROM business_hours WHERE store_id = $1`, [storeId]);
+    assert.equal(hoursRows.length, 0);
+});
+
+test("purgeStore: cancela la suscripción de Stripe activa del negocio", async (t) => {
+    const ownerId = await createUser();
+    const storeId = await createStore(ownerId, { approved: true });
+    t.after(() => cleanup({ userId: ownerId }));
+    await pool.query(`UPDATE stores SET stripe_subscription_id = 'sub_test_purge' WHERE id = $1`, [storeId]);
+
+    const originalCancel = stripe.subscriptions.cancel;
+    let canceledId = null;
+    stripe.subscriptions.cancel = async (id) => {
+        canceledId = id;
+        return { id };
+    };
+    t.after(() => {
+        stripe.subscriptions.cancel = originalCancel;
+    });
+
+    const res = mockRes();
+    await admin.purgeStore({ params: { id: storeId } }, res);
+
+    assert.equal(res.statusCode, 204);
+    assert.equal(canceledId, "sub_test_purge");
 });
 
 after(() => pool.end());
