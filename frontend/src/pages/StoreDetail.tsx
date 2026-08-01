@@ -3,7 +3,9 @@ import { Link, useParams } from "react-router-dom";
 import { Heart, MapPin, Phone, Star, WhatsappLogo } from "@phosphor-icons/react";
 import { api, ApiError, imageUrl } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import type { Product, Review, Service, Store } from "../types";
+import type { BusinessHour, Product, Review, Service, Store } from "../types";
+
+const DAYS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 
 function Stars({ n }: { n: number }) {
     return (
@@ -123,6 +125,35 @@ function ReviewsSection({ storeId }: { storeId: string }) {
     );
 }
 
+function BusinessHoursDisplay({ storeId }: { storeId: string }) {
+    const [hours, setHours] = useState<BusinessHour[] | null>(null);
+
+    useEffect(() => {
+        api
+            .get<BusinessHour[]>(`/stores/${storeId}/business-hours`)
+            .then(setHours)
+            .catch(() => setHours([]));
+    }, [storeId]);
+
+    if (!hours || hours.length === 0) return null;
+
+    return (
+        <div className="business-hours">
+            <h3>Horario</h3>
+            {DAYS.map((day, dayIndex) => {
+                const ranges = hours.filter((h) => h.day_of_week === dayIndex);
+                if (ranges.length === 0) return null;
+                return (
+                    <p key={dayIndex} className="business-hours-row">
+                        <span>{day}</span>
+                        <span>{ranges.map((r) => `${r.start_time.slice(0, 5)} - ${r.end_time.slice(0, 5)}`).join(", ")}</span>
+                    </p>
+                );
+            })}
+        </div>
+    );
+}
+
 function ContactButtons({ phone }: { phone: string | null }) {
     if (!phone) return null;
     const digits = phone.replace(/\D/g, ""); // wa.me necesita solo dígitos, con código de país
@@ -180,6 +211,7 @@ export default function StoreDetail() {
                         <ContactButtons phone={store.phone} />
                         <FavoriteButton storeId={store.id} />
                     </div>
+                    <BusinessHoursDisplay storeId={store.id} />
                 </div>
             </div>
 

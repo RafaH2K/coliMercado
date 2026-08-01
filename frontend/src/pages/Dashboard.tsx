@@ -22,10 +22,11 @@ const TIMEZONES: string[] =
     typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : ["America/Mexico_City"];
 const BROWSER_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-type DayRow = { enabled: boolean; start_time: string; end_time: string };
+type TimeRange = { start_time: string; end_time: string };
+type DayRow = { enabled: boolean; ranges: TimeRange[] };
 
 function emptyWeek(): DayRow[] {
-    return DAYS.map(() => ({ enabled: false, start_time: "09:00", end_time: "18:00" }));
+    return DAYS.map(() => ({ enabled: false, ranges: [{ start_time: "09:00", end_time: "18:00" }] }));
 }
 
 // Selector de país (código de marcado) + número local, combinados en un solo
@@ -474,9 +475,15 @@ function BusinessHoursEditor({ storeId }: { storeId: string }) {
         api.get<BusinessHour[]>(`/stores/${storeId}/business-hours`).then((hours) => {
             setWeek((week) =>
                 week.map((row, day) => {
-                    const existing = hours.find((h) => h.day_of_week === day);
-                    return existing
-                        ? { enabled: true, start_time: existing.start_time.slice(0, 5), end_time: existing.end_time.slice(0, 5) }
+                    const existing = hours.filter((h) => h.day_of_week === day);
+                    return existing.length
+                        ? {
+                              enabled: true,
+                              ranges: existing.map((h) => ({
+                                  start_time: h.start_time.slice(0, 5),
+                                  end_time: h.end_time.slice(0, 5),
+                              })),
+                          }
                         : row;
                 })
             );
@@ -487,13 +494,34 @@ function BusinessHoursEditor({ storeId }: { storeId: string }) {
         setWeek((week) => week.map((row, i) => (i === day ? { ...row, ...patch } : row)));
     }
 
+    function updateRange(day: number, rangeIndex: number, patch: Partial<TimeRange>) {
+        setWeek((week) =>
+            week.map((row, i) =>
+                i === day
+                    ? { ...row, ranges: row.ranges.map((r, j) => (j === rangeIndex ? { ...r, ...patch } : r)) }
+                    : row
+            )
+        );
+    }
+
+    function addRange(day: number) {
+        setWeek((week) =>
+            week.map((row, i) => (i === day ? { ...row, ranges: [...row.ranges, { start_time: "15:00", end_time: "19:00" }] } : row))
+        );
+    }
+
+    function removeRange(day: number, rangeIndex: number) {
+        setWeek((week) =>
+            week.map((row, i) => (i === day ? { ...row, ranges: row.ranges.filter((_, j) => j !== rangeIndex) } : row))
+        );
+    }
+
     async function save() {
         setLoading(true);
         setStatus(null);
-        const hours = week
-            .map((row, day) => ({ day_of_week: day, start_time: row.start_time, end_time: row.end_time, enabled: row.enabled }))
-            .filter((row) => row.enabled)
-            .map(({ day_of_week, start_time, end_time }) => ({ day_of_week, start_time, end_time }));
+        const hours = week.flatMap((row, day) =>
+            row.enabled ? row.ranges.map((r) => ({ day_of_week: day, start_time: r.start_time, end_time: r.end_time })) : []
+        );
         try {
             await api.put(`/stores/${storeId}/business-hours`, { hours });
             setStatus("Horario guardado.");
@@ -507,6 +535,9 @@ function BusinessHoursEditor({ storeId }: { storeId: string }) {
     return (
         <section className="card">
             <h2>Horario semanal</h2>
+            <p className="muted">
+                Si tu negocio cierra para comer, agrega un segundo turno en ese día (ej. 9:00-13:00 y 15:00-19:00).
+            </p>
             {week.map((row, day) => (
                 <div className="hours-row" key={day}>
                     <label>
@@ -517,18 +548,43 @@ function BusinessHoursEditor({ storeId }: { storeId: string }) {
                         />
                         {DAYS[day]}
                     </label>
-                    <input
-                        type="time"
-                        value={row.start_time}
-                        disabled={!row.enabled}
-                        onChange={(e) => updateDay(day, { start_time: e.target.value })}
-                    />
-                    <input
-                        type="time"
-                        value={row.end_time}
-                        disabled={!row.enabled}
-                        onChange={(e) => updateDay(day, { end_time: e.target.value })}
-                    />
+                    <div className="hours-ranges">
+                        {row.ranges.map((range, rangeIndex) => (
+                            <div className="hours-range-row" key={rangeIndex}>
+                                <input
+                                    type="time"
+                                    value={range.start_time}
+                                    disabled={!row.enabled}
+                                    onChange={(e) => updateRange(day, rangeIndex, { start_time: e.target.value })}
+                                />
+                                <input
+                                    type="time"
+                                    value={range.end_time}
+                                    disabled={!row.enabled}
+                                    onChange={(e) => updateRange(day, rangeIndex, { end_time: e.target.value })}
+                                />
+                                {row.ranges.length > 1 && (
+                                    <button
+                                        type="button"
+                                        className="btn btn-ghost btn-sm"
+                                        disabled={!row.enabled}
+                                        onClick={() => removeRange(day, rangeIndex)}
+                                        aria-label="Quitar turno"
+                                    >
+                                        <Trash size={13} />
+                                    </button>
+                                )}
+                            </div>
+                        ))}
+                        <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            disabled={!row.enabled}
+                            onClick={() => addRange(day)}
+                        >
+                            + Agregar turno
+                        </button>
+                    </div>
                 </div>
             ))}
             <button className="btn btn-primary" onClick={save} disabled={loading}>

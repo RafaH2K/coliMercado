@@ -300,13 +300,19 @@ input[type="checkbox"] { width: auto; margin: 0; accent-color: var(--accent); }
 
 .hours-row, .appointment-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   padding: 10px 0;
   border-bottom: 1px solid var(--border);
 }
-.hours-row label { display: flex; align-items: center; gap: 8px; width: 120px; font-size: 14px; }
+.hours-row label { display: flex; align-items: center; gap: 8px; width: 120px; font-size: 14px; padding-top: 6px; }
 .hours-row input[type="time"] { width: 120px; margin: 0; }
+.hours-ranges { display: flex; flex-direction: column; gap: 6px; }
+.hours-range-row { display: flex; align-items: center; gap: 8px; }
+
+.business-hours { margin-top: 12px; }
+.business-hours-row { display: flex; gap: 12px; margin: 2px 0; font-size: 14px; }
+.business-hours-row span:first-child { width: 90px; opacity: 0.7; }
 
 .inline-form {
   display: flex;
