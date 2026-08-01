@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
+import { orderFolio } from "../lib/format";
 import type { Order } from "../types";
 
 export default function MyOrders() {
@@ -45,6 +46,7 @@ export default function MyOrders() {
                                     {o.status}
                                 </span>
                             </div>
+                            <p className="muted">Folio: {orderFolio(o.id)}</p>
                             <ul style={{ margin: "8px 0", paddingLeft: 18 }}>
                                 {o.items.map((it) => (
                                     <li key={it.product_id} className="muted">

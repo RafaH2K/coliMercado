@@ -17,3 +17,11 @@ export function formatDateTime(iso: string, timeZone?: string) {
         timeZone,
     });
 }
+
+// Folio corto para que el cliente y el negocio puedan verificar entre ellos
+// que hablan del mismo pedido (ej. por WhatsApp), sin tener que leerse el
+// UUID completo. Mismos primeros 8 caracteres en ambos lados: el id ya es
+// único, esto solo lo hace legible.
+export function orderFolio(id: string) {
+    return id.slice(0, 8).toUpperCase();
+}

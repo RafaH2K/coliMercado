@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Eye, ShoppingBag, Trash } from "@phosphor-icons/react";
 import { api, ApiError, imageUrl } from "../lib/api";
-import { formatDateTime } from "../lib/format";
+import { formatDateTime, orderFolio } from "../lib/format";
 import { COUNTRIES, joinPhone, splitPhone } from "../lib/countries";
 import type {
     Appointment,
@@ -1162,8 +1162,8 @@ function OrdersManager({ storeId }: { storeId: string }) {
                 orders.map((o) => (
                     <div className="appointment-row" key={o.id}>
                         <span>
-                            {o.items.map((it) => `${it.quantity}× ${it.name}`).join(", ")} · ${o.total_amount} ·{" "}
-                            {o.customer_name || o.customer_email}
+                            Folio {orderFolio(o.id)} · {o.items.map((it) => `${it.quantity}× ${it.name}`).join(", ")} · $
+                            {o.total_amount} · {o.customer_name || o.customer_email}
                         </span>
                         <select value={o.status} onChange={(e) => changeStatus(o.id, e.target.value as Order["status"])}>
                             {ORDER_STATUSES.map((s) => (
