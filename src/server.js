@@ -1,10 +1,11 @@
 require("dotenv").config();
 const app = require("./app.js");
-// WhatsApp: descomentar junto con WHATSAPP_TOKEN/WHATSAPP_PHONE_NUMBER_ID en
-// .env cuando haya credenciales reales de Meta (ver src/jobs/whatsappScheduler.js).
-// const { start: startWhatsappScheduler } = require("./jobs/whatsappScheduler");
+const { start: startDailySummaryScheduler } = require("./jobs/dailySummaryScheduler");
+// El resumen diario se manda por correo mientras no haya credenciales reales
+// de WhatsApp (Meta); ver src/lib/whatsappNotifications.js para el aviso de
+// cancelación, que sigue pendiente de esas credenciales.
 
 const port = process.env.PORT || 3000;
 app.listen(port);
-// startWhatsappScheduler();
+startDailySummaryScheduler();
 console.log(`Servidor corriendo en el puerto ${port}`);
