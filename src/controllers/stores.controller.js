@@ -1,6 +1,7 @@
 const path = require("path");
 const { unlink } = require("fs/promises");
 const pool = require("../config/db");
+const stripe = require("../config/stripe");
 const { isValidTimeZone } = require("../lib/timezone");
 const { UPLOAD_DIR } = require("../config/upload");
 
@@ -175,22 +176,41 @@ async function update(req, res) {
     }
 }
 
-// Sin pasarela de pago todavía: asigna el plan directamente. Cuando haya
-// cobro recurrente, esto se vuelve un webhook de esa pasarela en vez de un
-// PATCH libre del dueño.
+// Solo baja a Free (gratis, nada que cobrar): cancela la suscripción de
+// Stripe activa si la hay. Los planes de pago ya no se asignan aquí, van por
+// plans.controller.js#createCheckoutSession (cobro real vía Stripe) — el
+// webhook de Stripe es quien los activa una vez confirmado el pago.
 async function setPlan(req, res) {
     const { plan_code } = req.body;
     if (typeof plan_code !== "string") {
         return res.status(400).json({ error: "plan_code es requerido" });
     }
     try {
-        const { rows: planRows } = await pool.query(`SELECT id FROM plans WHERE code = $1`, [plan_code]);
-        if (!planRows[0]) return res.status(400).json({ error: "Plan inválido" });
+        const { rows: planRows } = await pool.query(`SELECT id, price_mxn FROM plans WHERE code = $1`, [plan_code]);
+        const plan = planRows[0];
+        if (!plan) return res.status(400).json({ error: "Plan inválido" });
+        if (Number(plan.price_mxn) > 0) {
+            return res.status(400).json({ error: "Este plan requiere pago; usa /plan/checkout-session" });
+        }
 
-        const { rows } = await pool.query(`UPDATE stores SET plan_id = $1 WHERE id = $2 RETURNING *`, [
-            planRows[0].id,
+        const { rows: storeRows } = await pool.query(`SELECT stripe_subscription_id FROM stores WHERE id = $1`, [
             req.store.id,
         ]);
+        const subscriptionId = storeRows[0]?.stripe_subscription_id;
+        if (subscriptionId) {
+            try {
+                await stripe.subscriptions.cancel(subscriptionId);
+            } catch (err) {
+                console.error("stores.setPlan: no se pudo cancelar la suscripción:", err.message);
+            }
+        }
+
+        // plan_id NULL es el sentinel de "Free" en todo el resto del código
+        // (ver enforceProductLimit), no el id de la fila 'free' de plans.
+        const { rows } = await pool.query(
+            `UPDATE stores SET plan_id = NULL, stripe_subscription_id = NULL WHERE id = $1 RETURNING *`,
+            [req.store.id]
+        );
         res.json(rows[0]);
     } catch (err) {
         console.error("stores.setPlan error:", err.message);

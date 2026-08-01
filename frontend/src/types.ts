@@ -18,8 +18,21 @@ export interface Store {
     timezone: string;
     is_active: boolean;
     created_at: string;
+    plan_id: string | null;
     avg_rating?: number;
     review_count?: number;
+}
+
+export interface Plan {
+    id: string;
+    code: "free" | "basico" | "pro";
+    name: string;
+    price_mxn: string;
+    max_products: number | null;
+    whatsapp_daily_summary: boolean;
+    whatsapp_summary_mode_choice: boolean;
+    whatsapp_cancellation_alerts: boolean;
+    featured_placement: boolean;
 }
 
 export interface PendingStore {

@@ -3,6 +3,7 @@ const requireAuth = require("../middlewares/auth");
 const requireStoreOwner = require("../middlewares/storeOwner");
 const enforceProductLimit = require("../middlewares/planLimit");
 const stores = require("../controllers/stores.controller");
+const plans = require("../controllers/plans.controller");
 const businessHours = require("../controllers/businessHours.controller");
 const services = require("../controllers/services.controller");
 const products = require("../controllers/products.controller");
@@ -19,6 +20,8 @@ router.get("/mine", requireAuth, stores.mine); // antes de "/:storeId" para que 
 router.get("/:storeId", stores.getById);
 router.patch("/:storeId", requireAuth, requireStoreOwner, stores.update);
 router.patch("/:storeId/plan", requireAuth, requireStoreOwner, stores.setPlan);
+router.post("/:storeId/plan/checkout-session", requireAuth, requireStoreOwner, plans.createCheckoutSession);
+router.post("/:storeId/plan/confirm", requireAuth, requireStoreOwner, plans.confirmCheckoutSession);
 router.post("/:storeId/logo", requireAuth, requireStoreOwner, handleUpload("logo"), stores.uploadLogo);
 router.get("/:storeId/stats", requireAuth, requireStoreOwner, stores.getStats);
 

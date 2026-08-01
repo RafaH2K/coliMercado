@@ -3,7 +3,7 @@ import { Eye, ShoppingBag, Trash } from "@phosphor-icons/react";
 import { api, ApiError, imageUrl } from "../lib/api";
 import { formatDateTime } from "../lib/format";
 import { COUNTRIES, joinPhone, splitPhone } from "../lib/countries";
-import type { Appointment, BusinessHour, Category, Order, Product, Service, Store, StoreStats } from "../types";
+import type { Appointment, BusinessHour, Category, Order, Plan, Product, Service, Store, StoreStats } from "../types";
 
 const DAYS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 const STATUSES: Appointment["status"][] = ["pendiente", "confirmada", "completada", "no_asistio", "cancelada"];
@@ -188,6 +188,7 @@ function StorePanel({ store: initialStore }: { store: Store }) {
             </label>
             <div className="card-stack">
                 <StatsPanel storeId={store.id} />
+                <PlanManager store={store} onChanged={setStore} />
                 <BusinessHoursEditor storeId={store.id} />
                 <ServicesManager storeId={store.id} />
                 <ProductsManager storeId={store.id} />
@@ -265,6 +266,97 @@ function StatsPanel({ storeId }: { storeId: string }) {
                     <div className="stat-tile" key={status}>
                         <strong>{stats.orders_by_status.find((s) => s.status === status)?.count ?? 0}</strong>
                         <span className="muted">{ORDER_STAT_LABELS[status]}</span>
+                    </div>
+                ))}
+            </div>
+        </section>
+    );
+}
+
+// Beneficios que distinguen a cada plan (max_products ya se muestra aparte).
+const PLAN_PERKS: { key: keyof Plan; label: string }[] = [
+    { key: "whatsapp_daily_summary", label: "Resumen diario de citas por WhatsApp" },
+    { key: "whatsapp_cancellation_alerts", label: "Aviso inmediato por cancelación" },
+    { key: "featured_placement", label: "Prioridad en resultados y home" },
+];
+
+function PlanManager({ store, onChanged }: { store: Store; onChanged: (store: Store) => void }) {
+    const [plans, setPlans] = useState<Plan[] | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [loadingCode, setLoadingCode] = useState<string | null>(null);
+
+    useEffect(() => {
+        api.get<Plan[]>("/plans").then(setPlans).catch(() => {});
+    }, []);
+
+    // Si volvemos de Stripe con ?plan_session_id=..., confirma la suscripción al
+    // instante (el webhook la activa de todos modos si el dueño nunca vuelve).
+    useEffect(() => {
+        const sessionId = new URLSearchParams(window.location.search).get("plan_session_id");
+        if (!sessionId) return;
+        api
+            .post<Store>(`/stores/${store.id}/plan/confirm`, { session_id: sessionId })
+            .then(onChanged)
+            .catch((err) => setError(err instanceof ApiError ? err.message : "No se pudo confirmar el pago"))
+            .finally(() => window.history.replaceState({}, "", "/mi-negocio"));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    async function choose(code: string) {
+        setError(null);
+        setLoadingCode(code);
+        try {
+            if (code === "free") {
+                const updated = await api.patch<Store>(`/stores/${store.id}/plan`, { plan_code: code });
+                onChanged(updated);
+            } else {
+                const { url } = await api.post<{ url: string }>(`/stores/${store.id}/plan/checkout-session`, {
+                    plan_code: code,
+                });
+                window.location.href = url;
+                return;
+            }
+        } catch (err) {
+            setError(err instanceof ApiError ? err.message : "No se pudo cambiar de plan");
+        } finally {
+            setLoadingCode(null);
+        }
+    }
+
+    if (!plans) return <section className="card"><p className="muted">Cargando planes...</p></section>;
+
+    const currentCode = plans.find((p) => p.id === store.plan_id)?.code ?? "free";
+
+    return (
+        <section className="card">
+            <h2>Plan de suscripción</h2>
+            {error && <p className="error">{error}</p>}
+            <div className="stats-grid">
+                {plans.map((p) => (
+                    <div className={`stat-tile ${p.code === currentCode ? "stat-tile-highlight" : ""}`} key={p.id}>
+                        <strong>{p.name}</strong>
+                        <span>{Number(p.price_mxn) > 0 ? `$${p.price_mxn}/mes` : "Gratis"}</span>
+                        <span className="muted">
+                            {p.max_products ? `${p.max_products} productos/servicios` : "Productos/servicios ilimitados"}
+                        </span>
+                        {PLAN_PERKS.filter((perk) => p[perk.key]).map((perk) => (
+                            <span className="muted" key={perk.key}>
+                                {perk.label}
+                            </span>
+                        ))}
+                        {p.code === currentCode ? (
+                            <button className="btn btn-ghost btn-sm" disabled>
+                                Plan actual
+                            </button>
+                        ) : (
+                            <button
+                                className="btn btn-primary btn-sm"
+                                onClick={() => choose(p.code)}
+                                disabled={loadingCode === p.code}
+                            >
+                                {loadingCode === p.code ? "Procesando..." : p.code === "free" ? "Bajar a Free" : "Suscribirme"}
+                            </button>
+                        )}
                     </div>
                 ))}
             </div>

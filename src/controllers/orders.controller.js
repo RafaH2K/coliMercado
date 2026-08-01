@@ -1,6 +1,7 @@
 const pool = require("../config/db");
 const stripe = require("../config/stripe");
 const { sendEmail } = require("../config/email");
+const plans = require("./plans.controller");
 
 // No se espera (fire-and-forget): un correo que tarda o falla no debe
 // retrasar ni tumbar la respuesta del pedido. Los errores solo se loggean.
@@ -269,14 +270,26 @@ async function handleStripeWebhook(req, res) {
         return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    if (event.type === "checkout.session.completed") {
-        try {
-            await fulfillStripeSession(event.data.object);
-        } catch (err) {
-            // Ya se hizo lo posible (incl. el reembolso si aplicaba); solo se
-            // deja registro. Si Stripe no recibe 2xx, reintentará el webhook.
-            console.error("stripe webhook: fulfillment error:", err.message);
+    try {
+        if (event.type === "checkout.session.completed") {
+            const session = event.data.object;
+            // mode "payment" = compra del carrito; "subscription" = alta de un
+            // plan de negocio. Comparten el mismo endpoint de webhook porque
+            // Stripe solo permite configurar una URL por evento en el dashboard.
+            if (session.mode === "subscription") {
+                await plans.handleSubscriptionCheckoutCompleted(session);
+            } else {
+                await fulfillStripeSession(session);
+            }
+        } else if (event.type === "customer.subscription.updated") {
+            await plans.handleSubscriptionUpdated(event.data.object);
+        } else if (event.type === "customer.subscription.deleted") {
+            await plans.handleSubscriptionDeleted(event.data.object);
         }
+    } catch (err) {
+        // Ya se hizo lo posible (incl. el reembolso si aplicaba); solo se
+        // deja registro. Si Stripe no recibe 2xx, reintentará el webhook.
+        console.error("stripe webhook: fulfillment error:", err.message);
     }
     res.json({ received: true });
 }
