@@ -11,7 +11,11 @@ let supabase;
 function client() {
     if (!supabase) {
         // Service role key: bypasa RLS de Storage, solo debe vivir en el backend.
-        supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+        supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+            // Solo usamos Storage, nunca Realtime — sin esto, supabase-js intenta
+            // resolver un WebSocket nativo al crear el cliente y truena en Node < 22.
+            realtime: { transport: class {} },
+        });
     }
     return supabase;
 }
