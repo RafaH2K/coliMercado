@@ -38,7 +38,9 @@ async function tick() {
             }
         }
     } catch (err) {
-        console.error("dailySummaryScheduler tick error:", err.message);
+        // err completo, no solo .message: fallas de red de bajo nivel (ej.
+        // AggregateError por IPv6 no soportado) suelen traer .message vacío.
+        console.error("dailySummaryScheduler tick error:", err);
     }
 }
 

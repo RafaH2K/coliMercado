@@ -16,4 +16,13 @@ const pool = new Pool({
     ssl: isLocal ? false : { rejectUnauthorized: false },
 });
 
+// Sin esto, un error en un cliente inactivo del pool (ej. se cae la conexión)
+// es un evento 'error' sin escucha -> Node lo trata como excepción no
+// capturada y TUMBA todo el proceso. Loggeamos el error completo (no solo
+// .message, que en fallas de red de bajo nivel como AggregateError suele
+// venir vacío) para poder diagnosticar sin adivinar.
+pool.on("error", (err) => {
+    console.error("pool de Postgres, error en cliente inactivo:", err);
+});
+
 module.exports = pool;

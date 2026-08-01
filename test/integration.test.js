@@ -59,12 +59,14 @@ test("CORS: un origen listado en CORS_ORIGIN recibe Access-Control-Allow-Origin"
     assert.equal(res.headers.get("access-control-allow-origin"), allowedOrigin);
 });
 
-test("CORS: un origen que no está en la lista es rechazado", async (t) => {
+test("CORS: un origen que no está en la lista responde 403 (no un 500 genérico)", async (t) => {
     const res = await fetch(`${baseUrl}/categories`, {
         headers: { Origin: "https://origen-no-permitido.example.com" },
     });
     assert.equal(res.headers.get("access-control-allow-origin"), null);
-    assert.notEqual(res.status, 200);
+    assert.equal(res.status, 403);
+    const body = await res.json();
+    assert.match(body.error, /CORS/);
 });
 
 test("GET /stores/mine sin token responde 401 (requireAuth real, vía HTTP)", async (t) => {

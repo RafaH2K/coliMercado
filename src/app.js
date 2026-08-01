@@ -73,4 +73,18 @@ app.get("/", (req, res) => {
     res.send("server responde hola");
 });
 
+// Sin esto, un origen rechazado por cors() cae al manejador de errores por
+// default de Express: un 500 en HTML, indistinguible de una falla real del
+// servidor (nos confundió varias veces mientras se depuraba el deploy). Debe
+// ir al final, con los 4 parámetros (así Express lo reconoce como manejador
+// de errores, no como middleware normal).
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+    if (err.message === "Origen no permitido por CORS") {
+        return res.status(403).json({ error: err.message });
+    }
+    console.error("Error no manejado:", err);
+    res.status(500).json({ error: "Error interno del servidor" });
+});
+
 module.exports = app;
