@@ -657,7 +657,7 @@ function ServicesManager({ storeId, allowDeposits }: { storeId: string; allowDep
         <section className="card">
             <h2>Servicios</h2>
             {services?.map((s) => (
-                <ServiceRow key={s.id} service={s} onChanged={load} />
+                <ServiceRow key={s.id} service={s} categories={categories} allowDeposits={allowDeposits} onChanged={load} />
             ))}
 
             <form onSubmit={handleSubmit} className="inline-form">
@@ -700,10 +700,32 @@ function ServicesManager({ storeId, allowDeposits }: { storeId: string; allowDep
     );
 }
 
-function ServiceRow({ service, onChanged }: { service: Service; onChanged: () => void }) {
+function ServiceRow({
+    service,
+    categories,
+    allowDeposits,
+    onChanged,
+}: {
+    service: Service;
+    categories: Category[];
+    allowDeposits: boolean;
+    onChanged: () => void;
+}) {
     const fileInput = useRef<HTMLInputElement>(null);
     const [uploading, setUploading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [editing, setEditing] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const [form, setForm] = useState({
+        name: service.name,
+        description: service.description || "",
+        price: service.price,
+        duration_minutes: String(service.duration_minutes || ""),
+        buffer_minutes: String(service.buffer_minutes ?? 0),
+        capacity: String(service.capacity ?? 1),
+        category_id: service.category_id || "",
+        deposit_amount: service.deposit_amount || "",
+    });
 
     async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
         const file = e.target.files?.[0];
@@ -728,12 +750,111 @@ function ServiceRow({ service, onChanged }: { service: Service; onChanged: () =>
         onChanged();
     }
 
+    async function save() {
+        setSaving(true);
+        setError(null);
+        try {
+            await api.patch(`/services/${service.id}`, {
+                name: form.name,
+                description: form.description,
+                price: Number(form.price),
+                duration_minutes: Number(form.duration_minutes),
+                buffer_minutes: Number(form.buffer_minutes),
+                capacity: Number(form.capacity),
+                category_id: form.category_id || null,
+                deposit_amount: allowDeposits && form.deposit_amount ? Number(form.deposit_amount) : null,
+            });
+            setEditing(false);
+            onChanged();
+        } catch (err) {
+            setError(err instanceof ApiError ? err.message : "No se pudo guardar el servicio");
+        } finally {
+            setSaving(false);
+        }
+    }
+
     return (
         <div className="service-row">
-            <strong>{service.name}</strong> · ${service.price} · {service.duration_minutes} min · capacidad{" "}
-            {service.capacity}
-            {!!service.deposit_amount && Number(service.deposit_amount) > 0 && (
-                <> · anticipo ${service.deposit_amount}</>
+            {editing ? (
+                <div className="inline-form">
+                    <input
+                        placeholder="Nombre"
+                        value={form.name}
+                        onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                    />
+                    <input
+                        placeholder="Descripción"
+                        value={form.description}
+                        onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                    />
+                    <select
+                        value={form.category_id}
+                        onChange={(e) => setForm((f) => ({ ...f, category_id: e.target.value }))}
+                    >
+                        <option value="">Sin categoría</option>
+                        {categories.map((c) => (
+                            <option key={c.id} value={c.id}>
+                                {c.name}
+                            </option>
+                        ))}
+                    </select>
+                    <input
+                        placeholder="Precio"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={form.price}
+                        onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))}
+                    />
+                    <input
+                        placeholder="Duración (min)"
+                        type="number"
+                        min="1"
+                        value={form.duration_minutes}
+                        onChange={(e) => setForm((f) => ({ ...f, duration_minutes: e.target.value }))}
+                    />
+                    <input
+                        placeholder="Colchón (min)"
+                        type="number"
+                        min="0"
+                        value={form.buffer_minutes}
+                        onChange={(e) => setForm((f) => ({ ...f, buffer_minutes: e.target.value }))}
+                    />
+                    <input
+                        placeholder="Capacidad"
+                        type="number"
+                        min="1"
+                        value={form.capacity}
+                        onChange={(e) => setForm((f) => ({ ...f, capacity: e.target.value }))}
+                    />
+                    {allowDeposits && (
+                        <input
+                            placeholder="Anticipo $ (opcional)"
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={form.deposit_amount}
+                            onChange={(e) => setForm((f) => ({ ...f, deposit_amount: e.target.value }))}
+                        />
+                    )}
+                    <button className="btn btn-primary btn-sm" onClick={save} disabled={saving}>
+                        {saving ? "Guardando..." : "Guardar"}
+                    </button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => setEditing(false)} disabled={saving}>
+                        Cancelar
+                    </button>
+                </div>
+            ) : (
+                <>
+                    <strong>{service.name}</strong> · ${service.price} · {service.duration_minutes} min · capacidad{" "}
+                    {service.capacity}
+                    {!!service.deposit_amount && Number(service.deposit_amount) > 0 && (
+                        <> · anticipo ${service.deposit_amount}</>
+                    )}{" "}
+                    <button className="btn btn-ghost btn-sm" onClick={() => setEditing(true)}>
+                        Editar
+                    </button>
+                </>
             )}
             <div className="gallery">
                 {service.images?.map((img) => (
@@ -844,7 +965,7 @@ function ProductsManager({ storeId }: { storeId: string }) {
         <section className="card">
             <h2>Productos</h2>
             {products?.map((p) => (
-                <ProductRow key={p.id} product={p} onChanged={load} />
+                <ProductRow key={p.id} product={p} categories={categories} onChanged={load} />
             ))}
 
             <form onSubmit={handleSubmit} className="inline-form">
@@ -869,10 +990,27 @@ function ProductsManager({ storeId }: { storeId: string }) {
     );
 }
 
-function ProductRow({ product, onChanged }: { product: Product; onChanged: () => void }) {
+function ProductRow({
+    product,
+    categories,
+    onChanged,
+}: {
+    product: Product;
+    categories: Category[];
+    onChanged: () => void;
+}) {
     const fileInput = useRef<HTMLInputElement>(null);
     const [uploading, setUploading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [editing, setEditing] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const [form, setForm] = useState({
+        name: product.name,
+        description: product.description || "",
+        price: product.price,
+        stock: String(product.stock ?? 0),
+        category_id: product.category_id || "",
+    });
 
     async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
         const file = e.target.files?.[0];
@@ -897,9 +1035,81 @@ function ProductRow({ product, onChanged }: { product: Product; onChanged: () =>
         onChanged();
     }
 
+    async function save() {
+        setSaving(true);
+        setError(null);
+        try {
+            await api.patch(`/products/${product.id}`, {
+                name: form.name,
+                description: form.description,
+                price: Number(form.price),
+                stock: Number(form.stock),
+                category_id: form.category_id || null,
+            });
+            setEditing(false);
+            onChanged();
+        } catch (err) {
+            setError(err instanceof ApiError ? err.message : "No se pudo guardar el producto");
+        } finally {
+            setSaving(false);
+        }
+    }
+
     return (
         <div className="service-row">
-            <strong>{product.name}</strong> · ${product.price} · {product.stock} en inventario
+            {editing ? (
+                <div className="inline-form">
+                    <input
+                        placeholder="Nombre"
+                        value={form.name}
+                        onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                    />
+                    <input
+                        placeholder="Descripción"
+                        value={form.description}
+                        onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                    />
+                    <select
+                        value={form.category_id}
+                        onChange={(e) => setForm((f) => ({ ...f, category_id: e.target.value }))}
+                    >
+                        <option value="">Sin categoría</option>
+                        {categories.map((c) => (
+                            <option key={c.id} value={c.id}>
+                                {c.name}
+                            </option>
+                        ))}
+                    </select>
+                    <input
+                        placeholder="Precio"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={form.price}
+                        onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))}
+                    />
+                    <input
+                        placeholder="Inventario"
+                        type="number"
+                        min="0"
+                        value={form.stock}
+                        onChange={(e) => setForm((f) => ({ ...f, stock: e.target.value }))}
+                    />
+                    <button className="btn btn-primary btn-sm" onClick={save} disabled={saving}>
+                        {saving ? "Guardando..." : "Guardar"}
+                    </button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => setEditing(false)} disabled={saving}>
+                        Cancelar
+                    </button>
+                </div>
+            ) : (
+                <>
+                    <strong>{product.name}</strong> · ${product.price} · {product.stock} en inventario{" "}
+                    <button className="btn btn-ghost btn-sm" onClick={() => setEditing(true)}>
+                        Editar
+                    </button>
+                </>
+            )}
             <div className="gallery">
                 {product.images?.map((img) => (
                     <div key={img.id} className="gallery-item">

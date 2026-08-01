@@ -121,6 +121,15 @@ async function update(req, res) {
         category_id,
         deposit_amount,
     } = req.body;
+    if (name !== undefined && !name.trim()) {
+        return res.status(400).json({ error: "El nombre del servicio es requerido" });
+    }
+    if (price !== undefined && !(price > 0)) {
+        return res.status(400).json({ error: "El precio debe ser mayor a 0" });
+    }
+    if (duration_minutes !== undefined && (!Number.isInteger(duration_minutes) || duration_minutes <= 0)) {
+        return res.status(400).json({ error: "duration_minutes debe ser un entero positivo (minutos)" });
+    }
     if (deposit_amount !== undefined && deposit_amount !== null && !(Number(deposit_amount) >= 0)) {
         return res.status(400).json({ error: "deposit_amount debe ser un número mayor o igual a 0" });
     }

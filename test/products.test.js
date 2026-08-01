@@ -142,4 +142,42 @@ test("update: actualiza solo los campos enviados (COALESCE conserva el resto)", 
     assert.equal(res.body.price, "50.00", "el precio no enviado no debió cambiar");
 });
 
+test("update: rechaza precio <= 0 sin tocar el producto", async (t) => {
+    const ownerId = await createUser();
+    const storeId = await createStore(ownerId);
+    const productId = await createProduct(storeId, { price: 50, stock: 3 });
+    t.after(() => cleanup({ userId: ownerId, storeId, productId }));
+
+    const res = mockRes();
+    await products.update({ product: { id: productId }, body: { price: 0 } }, res);
+
+    assert.equal(res.statusCode, 400);
+    const { rows } = await pool.query(`SELECT price FROM products WHERE id = $1`, [productId]);
+    assert.equal(rows[0].price, "50.00");
+});
+
+test("update: rechaza stock negativo", async (t) => {
+    const ownerId = await createUser();
+    const storeId = await createStore(ownerId);
+    const productId = await createProduct(storeId, { price: 50, stock: 3 });
+    t.after(() => cleanup({ userId: ownerId, storeId, productId }));
+
+    const res = mockRes();
+    await products.update({ product: { id: productId }, body: { stock: -1 } }, res);
+
+    assert.equal(res.statusCode, 400);
+});
+
+test("update: rechaza nombre vacío", async (t) => {
+    const ownerId = await createUser();
+    const storeId = await createStore(ownerId);
+    const productId = await createProduct(storeId);
+    t.after(() => cleanup({ userId: ownerId, storeId, productId }));
+
+    const res = mockRes();
+    await products.update({ product: { id: productId }, body: { name: "   " } }, res);
+
+    assert.equal(res.statusCode, 400);
+});
+
 after(() => pool.end());

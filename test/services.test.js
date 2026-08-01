@@ -177,6 +177,32 @@ test("update: rechaza deposit_amount negativo", async (t) => {
     assert.equal(res.statusCode, 400);
 });
 
+test("update: rechaza duration_minutes <= 0 sin tocar el servicio", async (t) => {
+    const ownerId = await createUser();
+    const storeId = await createStore(ownerId);
+    const serviceId = await createService(storeId, { duration_minutes: 30 });
+    t.after(() => cleanup({ userId: ownerId, storeId, productId: serviceId }));
+
+    const res = mockRes();
+    await services.update({ service: { id: serviceId }, body: { duration_minutes: 0 } }, res);
+
+    assert.equal(res.statusCode, 400);
+    const { rows } = await pool.query(`SELECT duration_minutes FROM products WHERE id = $1`, [serviceId]);
+    assert.equal(rows[0].duration_minutes, 30);
+});
+
+test("update: rechaza precio <= 0", async (t) => {
+    const ownerId = await createUser();
+    const storeId = await createStore(ownerId);
+    const serviceId = await createService(storeId, { price: 100 });
+    t.after(() => cleanup({ userId: ownerId, storeId, productId: serviceId }));
+
+    const res = mockRes();
+    await services.update({ service: { id: serviceId }, body: { price: -10 } }, res);
+
+    assert.equal(res.statusCode, 400);
+});
+
 test("availability: sin horario configurado devuelve slots vacíos", async (t) => {
     const ownerId = await createUser();
     const storeId = await createStore(ownerId, { approved: true });

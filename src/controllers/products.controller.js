@@ -92,6 +92,15 @@ async function getById(req, res) {
 
 async function update(req, res) {
     const { name, description, price, stock, is_active, category_id } = req.body;
+    if (name !== undefined && !name.trim()) {
+        return res.status(400).json({ error: "El nombre del producto es requerido" });
+    }
+    if (price !== undefined && !(price > 0)) {
+        return res.status(400).json({ error: "El precio debe ser mayor a 0" });
+    }
+    if (stock !== undefined && (!Number.isInteger(stock) || stock < 0)) {
+        return res.status(400).json({ error: "stock debe ser un entero mayor o igual a 0" });
+    }
     try {
         const { rows } = await pool.query(
             `UPDATE products SET
