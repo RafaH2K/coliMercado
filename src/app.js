@@ -23,9 +23,12 @@ app.use(helmet());
 // CORS_ORIGIN acepta uno o varios orígenes separados por coma (ej. tu app en
 // local + la desplegada en Vercel), para no tener que cambiar la variable de
 // entorno cada vez que se prueba contra uno u otro.
+// El header Origin del navegador nunca trae barra final, así que se le quita
+// a cada valor configurado — si no, "https://x.com/" en la variable de
+// entorno nunca hace match contra el "https://x.com" real que manda el navegador.
 const allowedOrigins = (process.env.CORS_ORIGIN || "")
     .split(",")
-    .map((origin) => origin.trim())
+    .map((origin) => origin.trim().replace(/\/$/, ""))
     .filter(Boolean);
 app.use(
     cors({
