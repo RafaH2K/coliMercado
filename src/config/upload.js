@@ -1,14 +1,15 @@
 const fs = require("fs");
 const path = require("path");
-const crypto = require("crypto");
 const multer = require("multer");
 
+// uploads/ sigue sirviendo las imágenes subidas antes de migrar a Supabase
+// Storage (ver src/lib/storage.js) — no se toca hasta que se decida migrarlas.
 const UPLOAD_DIR = path.join(__dirname, "..", "..", "uploads");
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 // Nunca confiar en el nombre/extensión que manda el cliente (path traversal,
-// disfrazar un ejecutable de ".jpg", etc.) — el nombre en disco se genera
-// aquí y la extensión sale de una lista fija según el mimetype real.
+// disfrazar un ejecutable de ".jpg", etc.) — el nombre final sale de una
+// lista fija según el mimetype real.
 const EXT_BY_MIME = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
@@ -16,15 +17,8 @@ const EXT_BY_MIME = {
     "image/gif": ".gif",
 };
 
-const storage = multer.diskStorage({
-    destination: UPLOAD_DIR,
-    filename: (req, file, cb) => {
-        cb(null, crypto.randomUUID() + EXT_BY_MIME[file.mimetype]);
-    },
-});
-
 const upload = multer({
-    storage,
+    storage: multer.memoryStorage(),
     limits: { fileSize: 5 * 1024 * 1024, files: 1 },
     fileFilter: (req, file, cb) => {
         if (!EXT_BY_MIME[file.mimetype]) {
@@ -48,4 +42,4 @@ function handleUpload(fieldName) {
     };
 }
 
-module.exports = { handleUpload, UPLOAD_DIR };
+module.exports = { handleUpload, UPLOAD_DIR, EXT_BY_MIME };

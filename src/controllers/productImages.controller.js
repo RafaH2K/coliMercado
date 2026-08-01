@@ -1,11 +1,9 @@
-const path = require("path");
-const { unlink } = require("fs/promises");
 const pool = require("../config/db");
-const { UPLOAD_DIR } = require("../config/upload");
+const storage = require("../lib/storage");
 
 async function add(req, res) {
-    const url = `/uploads/${req.file.filename}`;
     try {
+        const url = await storage.uploadImage(req.file);
         const { rows: posRows } = await pool.query(
             `SELECT COALESCE(MAX(position), -1) + 1 AS next FROM product_images WHERE product_id = $1`,
             [req.params.id]
@@ -28,9 +26,7 @@ async function remove(req, res) {
             [req.params.imageId, req.params.id]
         );
         if (!rows[0]) return res.status(404).json({ error: "Imagen no encontrada" });
-        if (rows[0].url.startsWith("/uploads/")) {
-            unlink(path.join(UPLOAD_DIR, path.basename(rows[0].url))).catch(() => {});
-        }
+        storage.deleteImage(rows[0].url);
         res.status(204).send();
     } catch (err) {
         console.error("productImages.remove error:", err.message);

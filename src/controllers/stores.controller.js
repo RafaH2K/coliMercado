@@ -1,9 +1,7 @@
-const path = require("path");
-const { unlink } = require("fs/promises");
 const pool = require("../config/db");
 const stripe = require("../config/stripe");
 const { isValidTimeZone } = require("../lib/timezone");
-const { UPLOAD_DIR } = require("../config/upload");
+const storage = require("../lib/storage");
 const { trimToLimit } = require("../middlewares/planLimit");
 
 async function create(req, res) {
@@ -223,17 +221,15 @@ async function setPlan(req, res) {
 }
 
 async function uploadLogo(req, res) {
-    const url = `/uploads/${req.file.filename}`;
     try {
+        const url = await storage.uploadImage(req.file);
         const { rows: prevRows } = await pool.query(`SELECT logo_url FROM stores WHERE id = $1`, [req.store.id]);
         const { rows } = await pool.query(`UPDATE stores SET logo_url = $1 WHERE id = $2 RETURNING *`, [
             url,
             req.store.id,
         ]);
         const oldUrl = prevRows[0]?.logo_url;
-        if (oldUrl && oldUrl.startsWith("/uploads/")) {
-            unlink(path.join(UPLOAD_DIR, path.basename(oldUrl))).catch(() => {});
-        }
+        if (oldUrl) storage.deleteImage(oldUrl);
         res.json(rows[0]);
     } catch (err) {
         console.error("stores.uploadLogo error:", err.message);

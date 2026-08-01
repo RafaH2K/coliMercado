@@ -3,15 +3,28 @@ const { after } = test;
 const assert = require("node:assert/strict");
 const { pool, createUser, createStore, createProduct, cleanup, mockRes } = require("./fixtures");
 const productImages = require("../src/controllers/productImages.controller");
+const storage = require("../src/lib/storage");
+
+// uploadImage/deleteImage hacen una llamada de red real a Supabase Storage —
+// en tests se reemplazan por fakes (mismo patrón que el stub de stripe en
+// stores.test.js), así no dependen de credenciales ni de internet.
+function fakeUpload(t, filename) {
+    const original = storage.uploadImage;
+    storage.uploadImage = async () => `/uploads/${filename}`;
+    t.after(() => {
+        storage.uploadImage = original;
+    });
+}
 
 test("add: agrega una imagen con position 0 cuando no hay ninguna", async (t) => {
     const ownerId = await createUser();
     const storeId = await createStore(ownerId);
     const productId = await createProduct(storeId);
     t.after(() => cleanup({ userId: ownerId, storeId, productId }));
+    fakeUpload(t, "foto1.jpg");
 
     const res = mockRes();
-    await productImages.add({ params: { id: productId }, file: { filename: "foto1.jpg" } }, res);
+    await productImages.add({ params: { id: productId }, file: {} }, res);
 
     assert.equal(res.statusCode, 201);
     assert.equal(res.body.url, "/uploads/foto1.jpg");
@@ -23,10 +36,11 @@ test("add: la siguiente imagen toma la posición siguiente (MAX(position)+1)", a
     const storeId = await createStore(ownerId);
     const productId = await createProduct(storeId);
     t.after(() => cleanup({ userId: ownerId, storeId, productId }));
+    fakeUpload(t, "foto1.jpg");
 
-    await productImages.add({ params: { id: productId }, file: { filename: "foto1.jpg" } }, mockRes());
+    await productImages.add({ params: { id: productId }, file: {} }, mockRes());
     const res = mockRes();
-    await productImages.add({ params: { id: productId }, file: { filename: "foto2.jpg" } }, res);
+    await productImages.add({ params: { id: productId }, file: {} }, res);
 
     assert.equal(res.body.position, 1);
 });
@@ -36,9 +50,10 @@ test("remove: borra una imagen existente", async (t) => {
     const storeId = await createStore(ownerId);
     const productId = await createProduct(storeId);
     t.after(() => cleanup({ userId: ownerId, storeId, productId }));
+    fakeUpload(t, "foto1.jpg");
 
     const added = mockRes();
-    await productImages.add({ params: { id: productId }, file: { filename: "foto1.jpg" } }, added);
+    await productImages.add({ params: { id: productId }, file: {} }, added);
 
     const res = mockRes();
     await productImages.remove({ params: { id: productId, imageId: added.body.id } }, res);
@@ -69,9 +84,10 @@ test("remove: no borra una imagen de OTRO producto aunque el id de la imagen exi
     const productId = await createProduct(storeId);
     const otherProductId = await createProduct(storeId);
     t.after(() => cleanup({ userId: ownerId, storeId, productId: [productId, otherProductId] }));
+    fakeUpload(t, "foto1.jpg");
 
     const added = mockRes();
-    await productImages.add({ params: { id: productId }, file: { filename: "foto1.jpg" } }, added);
+    await productImages.add({ params: { id: productId }, file: {} }, added);
 
     const res = mockRes();
     await productImages.remove({ params: { id: otherProductId, imageId: added.body.id } }, res);
