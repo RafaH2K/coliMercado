@@ -29,11 +29,11 @@ async function createProduct(storeId, { price = 100, stock = 5 } = {}) {
     return rows[0].id;
 }
 
-async function createService(storeId, { price = 100, duration_minutes = 30, capacity = 1 } = {}) {
+async function createService(storeId, { price = 100, duration_minutes = 30, capacity = 1, deposit_amount = null } = {}) {
     const { rows } = await pool.query(
-        `INSERT INTO products (store_id, name, type, price, duration_minutes, capacity)
-         VALUES ($1, 'Test Service', 'service', $2, $3, $4) RETURNING id`,
-        [storeId, price, duration_minutes, capacity]
+        `INSERT INTO products (store_id, name, type, price, duration_minutes, capacity, deposit_amount)
+         VALUES ($1, 'Test Service', 'service', $2, $3, $4, $5) RETURNING id`,
+        [storeId, price, duration_minutes, capacity, deposit_amount]
     );
     return rows[0].id;
 }

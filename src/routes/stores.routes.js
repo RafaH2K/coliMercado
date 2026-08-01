@@ -1,7 +1,7 @@
 const { Router } = require("express");
 const requireAuth = require("../middlewares/auth");
 const requireStoreOwner = require("../middlewares/storeOwner");
-const enforceProductLimit = require("../middlewares/planLimit");
+const { enforceProductLimit } = require("../middlewares/planLimit");
 const stores = require("../controllers/stores.controller");
 const plans = require("../controllers/plans.controller");
 const businessHours = require("../controllers/businessHours.controller");
@@ -22,6 +22,9 @@ router.patch("/:storeId", requireAuth, requireStoreOwner, stores.update);
 router.patch("/:storeId/plan", requireAuth, requireStoreOwner, stores.setPlan);
 router.post("/:storeId/plan/checkout-session", requireAuth, requireStoreOwner, plans.createCheckoutSession);
 router.post("/:storeId/plan/confirm", requireAuth, requireStoreOwner, plans.confirmCheckoutSession);
+router.get("/:storeId/plan/subscription", requireAuth, requireStoreOwner, plans.getSubscriptionStatus);
+router.post("/:storeId/plan/cancel", requireAuth, requireStoreOwner, plans.cancelSubscription);
+router.post("/:storeId/plan/resume", requireAuth, requireStoreOwner, plans.resumeSubscription);
 router.post("/:storeId/logo", requireAuth, requireStoreOwner, handleUpload("logo"), stores.uploadLogo);
 router.get("/:storeId/stats", requireAuth, requireStoreOwner, stores.getStats);
 

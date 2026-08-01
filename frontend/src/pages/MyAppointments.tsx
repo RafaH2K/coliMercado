@@ -21,6 +21,18 @@ export default function MyAppointments() {
 
     useEffect(load, []);
 
+    // Si volvemos de Stripe con ?deposit_session_id=..., confirma la cita al
+    // instante (el webhook la activa de todos modos si el cliente nunca vuelve).
+    useEffect(() => {
+        const sessionId = new URLSearchParams(window.location.search).get("deposit_session_id");
+        if (!sessionId) return;
+        api
+            .post(`/appointments/deposit/confirm`, { session_id: sessionId })
+            .then(load)
+            .catch((err) => setError(err instanceof ApiError ? err.message : "No se pudo confirmar el anticipo"))
+            .finally(() => window.history.replaceState({}, "", "/mis-citas"));
+    }, []);
+
     async function cancel(id: string) {
         try {
             await api.patch(`/appointments/${id}/status`, { status: "cancelada" });

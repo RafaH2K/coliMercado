@@ -1,5 +1,6 @@
 const pool = require("../config/db");
 const stripe = require("../config/stripe");
+const { trimToLimit } = require("../middlewares/planLimit");
 
 async function list(req, res) {
     try {
@@ -19,22 +20,33 @@ async function activateSubscription(session) {
     const storeId = session.metadata?.store_id;
     const planCode = session.metadata?.plan_code;
     if (!storeId || !planCode) return;
-    const { rows: planRows } = await pool.query(`SELECT id FROM plans WHERE code = $1`, [planCode]);
-    if (!planRows[0]) return;
+    const { rows: planRows } = await pool.query(`SELECT id, max_products FROM plans WHERE code = $1`, [planCode]);
+    const plan = planRows[0];
+    if (!plan) return;
     await pool.query(`UPDATE stores SET plan_id = $1, stripe_subscription_id = $2 WHERE id = $3`, [
-        planRows[0].id,
+        plan.id,
         session.subscription,
         storeId,
     ]);
+    // Cambiar a un plan de pago más limitado (ej. Pro -> Básico) también puede
+    // dejar el catálogo activo por encima del nuevo tope.
+    await trimToLimit(storeId, plan.max_products);
 }
 
 // Un negocio con una suscripción cuyo estado ya no es activo (falló el cobro
-// tras los reintentos de Stripe, o se canceló) vuelve a Free automáticamente.
+// tras los reintentos de Stripe, se canceló, o llegó el fin del periodo tras
+// una cancelación programada) vuelve a Free automáticamente, y recorta el
+// catálogo activo si excede el tope de Free.
 async function downgradeToFree(subscriptionId) {
-    await pool.query(
-        `UPDATE stores SET plan_id = NULL, stripe_subscription_id = NULL WHERE stripe_subscription_id = $1`,
+    const { rows } = await pool.query(
+        `UPDATE stores SET plan_id = NULL, stripe_subscription_id = NULL
+         WHERE stripe_subscription_id = $1 RETURNING id`,
         [subscriptionId]
     );
+    const storeId = rows[0]?.id;
+    if (!storeId) return;
+    const { rows: freePlan } = await pool.query(`SELECT max_products FROM plans WHERE code = 'free'`);
+    await trimToLimit(storeId, freePlan[0]?.max_products);
 }
 
 // Llamado desde el webhook de Stripe (fuente de verdad).
@@ -142,10 +154,75 @@ async function confirmCheckoutSession(req, res) {
     }
 }
 
+// Cancela AL FIN DEL PERIODO ya pagado: el negocio conserva su plan (y su
+// límite) hasta esa fecha. Stripe hace la cuenta regresiva por su cuenta —
+// nada que agendar de nuestro lado: cuando llegue el corte, Stripe manda
+// customer.subscription.deleted y el webhook baja el negocio a Free (ver
+// downgradeToFree, que ahí sí recorta el catálogo al tope de Free).
+async function cancelSubscription(req, res) {
+    try {
+        const { rows } = await pool.query(`SELECT stripe_subscription_id FROM stores WHERE id = $1`, [req.store.id]);
+        const subscriptionId = rows[0]?.stripe_subscription_id;
+        if (!subscriptionId) return res.status(400).json({ error: "No tienes una suscripción activa" });
+
+        const subscription = await stripe.subscriptions.update(subscriptionId, { cancel_at_period_end: true });
+        res.json({
+            cancel_at_period_end: subscription.cancel_at_period_end,
+            cancel_at: subscription.cancel_at,
+        });
+    } catch (err) {
+        console.error("plans.cancelSubscription error:", err.message);
+        res.status(500).json({ error: "Error interno del servidor" });
+    }
+}
+
+// Revierte una cancelación programada (todavía no llegó el fin del periodo).
+async function resumeSubscription(req, res) {
+    try {
+        const { rows } = await pool.query(`SELECT stripe_subscription_id FROM stores WHERE id = $1`, [req.store.id]);
+        const subscriptionId = rows[0]?.stripe_subscription_id;
+        if (!subscriptionId) return res.status(400).json({ error: "No tienes una suscripción activa" });
+
+        const subscription = await stripe.subscriptions.update(subscriptionId, { cancel_at_period_end: false });
+        res.json({
+            cancel_at_period_end: subscription.cancel_at_period_end,
+            cancel_at: subscription.cancel_at,
+        });
+    } catch (err) {
+        console.error("plans.resumeSubscription error:", err.message);
+        res.status(500).json({ error: "Error interno del servidor" });
+    }
+}
+
+// Estado en vivo desde Stripe (no se duplica en la BD): si no hay
+// suscripción activa, subscribed:false y el frontend simplemente no muestra
+// el botón de cancelar/reactivar.
+async function getSubscriptionStatus(req, res) {
+    try {
+        const { rows } = await pool.query(`SELECT stripe_subscription_id FROM stores WHERE id = $1`, [req.store.id]);
+        const subscriptionId = rows[0]?.stripe_subscription_id;
+        if (!subscriptionId) return res.json({ subscribed: false });
+
+        const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+        res.json({
+            subscribed: true,
+            status: subscription.status,
+            cancel_at_period_end: subscription.cancel_at_period_end,
+            cancel_at: subscription.cancel_at,
+        });
+    } catch (err) {
+        console.error("plans.getSubscriptionStatus error:", err.message);
+        res.status(500).json({ error: "Error interno del servidor" });
+    }
+}
+
 module.exports = {
     list,
     createCheckoutSession,
     confirmCheckoutSession,
+    cancelSubscription,
+    resumeSubscription,
+    getSubscriptionStatus,
     handleSubscriptionCheckoutCompleted,
     handleSubscriptionUpdated,
     handleSubscriptionDeleted,

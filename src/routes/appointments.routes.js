@@ -6,6 +6,7 @@ const messages = require("../controllers/messages.controller");
 const router = Router();
 
 router.post("/", requireAuth, appointments.create);
+router.post("/deposit/confirm", requireAuth, appointments.confirmDeposit);
 router.get("/me", requireAuth, appointments.listMine);
 router.patch("/:id/status", requireAuth, appointments.updateStatus);
 router.get("/:id/messages", requireAuth, messages.listForAppointment);

@@ -4,7 +4,7 @@ import { CalendarBlank, CheckCircle, Clock, UsersThree } from "@phosphor-icons/r
 import { api, ApiError, imageUrl } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { formatDateTime, formatTime } from "../lib/format";
-import type { Appointment, Service, Slot } from "../types";
+import type { Appointment, AppointmentDepositRequired, Service, Slot } from "../types";
 
 // Fecha local del navegador, no UTC (toISOString() da la fecha en UTC y
 // puede mostrar "mañana" si ya cruzó medianoche UTC pero no la local).
@@ -47,12 +47,16 @@ export default function ServiceDetail() {
         setBooking(slot.starts_at);
         setError(null);
         try {
-            const appointment = await api.post<Appointment>("/appointments", {
+            const result = await api.post<Appointment | AppointmentDepositRequired>("/appointments", {
                 product_id: serviceId,
                 starts_at: slot.starts_at,
                 party_size: partySize ? Number(partySize) : undefined,
             });
-            setConfirmed(appointment);
+            if ("requires_payment" in result) {
+                window.location.href = result.checkout_url;
+                return;
+            }
+            setConfirmed(result);
             setSlots((prev) => prev && prev.filter((s) => s.starts_at !== slot.starts_at));
         } catch (err) {
             setError(err instanceof ApiError ? err.message : "No se pudo reservar ese horario");
@@ -120,6 +124,12 @@ export default function ServiceDetail() {
                             onChange={(e) => setDate(e.target.value)}
                         />
                     </label>
+                    {service.deposit_amount && Number(service.deposit_amount) > 0 && (
+                        <p className="muted">
+                            Este servicio requiere un anticipo de ${service.deposit_amount} para reservar; se paga
+                            con tarjeta al elegir el horario.
+                        </p>
+                    )}
                     <label className="field">
                         <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                             <UsersThree size={14} /> Número de personas (opcional)

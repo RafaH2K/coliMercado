@@ -1,7 +1,7 @@
 const test = require("node:test");
 const { after } = test;
 const assert = require("node:assert/strict");
-const { pool, createUser, createStore, cleanup, mockRes } = require("./fixtures");
+const { pool, createUser, createStore, createProduct, cleanup, mockRes } = require("./fixtures");
 const plans = require("../src/controllers/plans.controller");
 const stripe = require("../src/config/stripe");
 
@@ -148,6 +148,125 @@ test("handleSubscriptionDeleted: la cancelación en Stripe degrada el negocio a 
     const { rows } = await pool.query(`SELECT plan_id, stripe_subscription_id FROM stores WHERE id = $1`, [storeId]);
     assert.equal(rows[0].plan_id, null);
     assert.equal(rows[0].stripe_subscription_id, null);
+});
+
+test("handleSubscriptionDeleted: recorta el catálogo activo al tope de Free (conserva los más viejos)", async (t) => {
+    const userId = await createUser();
+    const storeId = await createStore(userId);
+    const productIds = [];
+    for (let i = 0; i < 7; i++) productIds.push(await createProduct(storeId)); // Pro: sin tope
+    t.after(() => cleanup({ userId, storeId, productId: productIds }));
+
+    const { rows: proPlan } = await pool.query(`SELECT id FROM plans WHERE code = 'pro'`);
+    await pool.query(`UPDATE stores SET plan_id = $1, stripe_subscription_id = 'sub_test_recorte' WHERE id = $2`, [
+        proPlan[0].id,
+        storeId,
+    ]);
+
+    await plans.handleSubscriptionDeleted({ id: "sub_test_recorte" });
+
+    const { rows } = await pool.query(
+        `SELECT is_active FROM products WHERE store_id = $1 ORDER BY created_at ASC`,
+        [storeId]
+    );
+    assert.equal(rows.filter((r) => r.is_active).length, 5, "solo deben quedar 5 activos (tope de Free)");
+    assert.ok(rows.slice(0, 5).every((r) => r.is_active), "los 5 más viejos deben conservarse activos");
+    assert.ok(rows.slice(5).every((r) => !r.is_active), "los más nuevos deben desactivarse");
+});
+
+test("cancelSubscription: programa cancel_at_period_end sin bajar el plan de inmediato", async (t) => {
+    const userId = await createUser();
+    const storeId = await createStore(userId);
+    await pool.query(`UPDATE stores SET stripe_subscription_id = 'sub_test_cancelar' WHERE id = $1`, [storeId]);
+    t.after(() => cleanup({ userId, storeId }));
+
+    const originalUpdate = stripe.subscriptions.update;
+    let updateArgs = null;
+    stripe.subscriptions.update = async (id, args) => {
+        updateArgs = { id, ...args };
+        return { cancel_at_period_end: true, cancel_at: 1234567890 };
+    };
+    t.after(() => {
+        stripe.subscriptions.update = originalUpdate;
+    });
+
+    const res = mockRes();
+    await plans.cancelSubscription({ store: { id: storeId } }, res);
+
+    assert.equal(updateArgs.id, "sub_test_cancelar");
+    assert.equal(updateArgs.cancel_at_period_end, true);
+    assert.equal(res.body.cancel_at_period_end, true);
+    assert.equal(res.body.cancel_at, 1234567890);
+});
+
+test("cancelSubscription: sin suscripción activa responde 400", async (t) => {
+    const userId = await createUser();
+    const storeId = await createStore(userId);
+    t.after(() => cleanup({ userId, storeId }));
+
+    const res = mockRes();
+    await plans.cancelSubscription({ store: { id: storeId } }, res);
+
+    assert.equal(res.statusCode, 400);
+});
+
+test("resumeSubscription: revierte cancel_at_period_end", async (t) => {
+    const userId = await createUser();
+    const storeId = await createStore(userId);
+    await pool.query(`UPDATE stores SET stripe_subscription_id = 'sub_test_reactivar' WHERE id = $1`, [storeId]);
+    t.after(() => cleanup({ userId, storeId }));
+
+    const originalUpdate = stripe.subscriptions.update;
+    let updateArgs = null;
+    stripe.subscriptions.update = async (id, args) => {
+        updateArgs = { id, ...args };
+        return { cancel_at_period_end: false, cancel_at: 1234567890 };
+    };
+    t.after(() => {
+        stripe.subscriptions.update = originalUpdate;
+    });
+
+    const res = mockRes();
+    await plans.resumeSubscription({ store: { id: storeId } }, res);
+
+    assert.equal(updateArgs.cancel_at_period_end, false);
+    assert.equal(res.body.cancel_at_period_end, false);
+});
+
+test("getSubscriptionStatus: sin suscripción responde subscribed:false", async (t) => {
+    const userId = await createUser();
+    const storeId = await createStore(userId);
+    t.after(() => cleanup({ userId, storeId }));
+
+    const res = mockRes();
+    await plans.getSubscriptionStatus({ store: { id: storeId } }, res);
+
+    assert.equal(res.body.subscribed, false);
+});
+
+test("getSubscriptionStatus: con suscripción devuelve el estado en vivo de Stripe", async (t) => {
+    const userId = await createUser();
+    const storeId = await createStore(userId);
+    await pool.query(`UPDATE stores SET stripe_subscription_id = 'sub_test_estado' WHERE id = $1`, [storeId]);
+    t.after(() => cleanup({ userId, storeId }));
+
+    const originalRetrieve = stripe.subscriptions.retrieve;
+    stripe.subscriptions.retrieve = async (id) => ({
+        id,
+        status: "active",
+        cancel_at_period_end: true,
+        cancel_at: 1234567890,
+    });
+    t.after(() => {
+        stripe.subscriptions.retrieve = originalRetrieve;
+    });
+
+    const res = mockRes();
+    await plans.getSubscriptionStatus({ store: { id: storeId } }, res);
+
+    assert.equal(res.body.subscribed, true);
+    assert.equal(res.body.status, "active");
+    assert.equal(res.body.cancel_at_period_end, true);
 });
 
 after(() => pool.end());

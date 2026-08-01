@@ -2,6 +2,7 @@ const pool = require("../config/db");
 const stripe = require("../config/stripe");
 const { sendEmail } = require("../config/email");
 const plans = require("./plans.controller");
+const appointments = require("./appointments.controller");
 
 // No se espera (fire-and-forget): un correo que tarda o falla no debe
 // retrasar ni tumbar la respuesta del pedido. Los errores solo se loggean.
@@ -33,6 +34,13 @@ const ITEMS_SUBQUERY = `
         '[]'
     ) AS items
 `;
+
+// Recargo solo en el pago con tarjeta (Stripe): cubre la comisión de Stripe
+// (~3%) y deja margen para la plataforma. Es puramente sobre lo que cobra
+// Stripe — el pedido y las estadísticas del negocio (placeOrders, más abajo)
+// siguen calculándose sobre products.price sin este recargo, así que al
+// negocio no le cambia nada de lo que ve ni de lo que se le reporta.
+const STRIPE_CARD_SURCHARGE = 1.12;
 
 class CheckoutError extends Error {
     constructor(status, message) {
@@ -159,7 +167,7 @@ async function createCheckoutSession(req, res) {
                 quantity: item.quantity,
                 price_data: {
                     currency: "mxn",
-                    unit_amount: Math.round(Number(item.price) * 100),
+                    unit_amount: Math.round(Number(item.price) * 100 * STRIPE_CARD_SURCHARGE),
                     product_data: { name: item.name },
                 },
             })),
@@ -273,10 +281,13 @@ async function handleStripeWebhook(req, res) {
     try {
         if (event.type === "checkout.session.completed") {
             const session = event.data.object;
-            // mode "payment" = compra del carrito; "subscription" = alta de un
-            // plan de negocio. Comparten el mismo endpoint de webhook porque
-            // Stripe solo permite configurar una URL por evento en el dashboard.
-            if (session.mode === "subscription") {
+            // "carrito", "alta de plan" y "anticipo de cita" comparten el mismo
+            // endpoint de webhook (Stripe solo permite configurar una URL por
+            // evento). El anticipo va en mode:"payment" igual que el carrito,
+            // por eso se distingue por metadata.kind y no por session.mode.
+            if (session.metadata?.kind === "appointment_deposit") {
+                await appointments.activateDeposit(session);
+            } else if (session.mode === "subscription") {
                 await plans.handleSubscriptionCheckoutCompleted(session);
             } else {
                 await fulfillStripeSession(session);

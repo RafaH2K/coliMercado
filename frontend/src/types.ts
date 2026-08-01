@@ -23,6 +23,13 @@ export interface Store {
     review_count?: number;
 }
 
+export interface SubscriptionStatus {
+    subscribed: boolean;
+    status?: string;
+    cancel_at_period_end?: boolean;
+    cancel_at?: number | null; // timestamp Unix (segundos) en que se hará efectiva la cancelación
+}
+
 export interface Plan {
     id: string;
     code: "free" | "basico" | "pro";
@@ -33,6 +40,7 @@ export interface Plan {
     whatsapp_summary_mode_choice: boolean;
     whatsapp_cancellation_alerts: boolean;
     featured_placement: boolean;
+    deposit_payments: boolean;
 }
 
 export interface PendingStore {
@@ -84,6 +92,7 @@ export interface Service {
     buffer_minutes: number | null;
     capacity: number | null;
     is_active: boolean;
+    deposit_amount: string | null;
     store_timezone?: string;
     store_name?: string;
     images?: ProductImage[];
@@ -160,6 +169,14 @@ export interface Message {
     sender_id: string;
     body: string;
     created_at: string;
+}
+
+// El backend devuelve esto en vez de la cita cuando el servicio exige
+// anticipo (Pro): hay que redirigir a Stripe antes de que exista la cita.
+export interface AppointmentDepositRequired {
+    requires_payment: true;
+    checkout_url: string;
+    appointment_id: string;
 }
 
 export interface Appointment {

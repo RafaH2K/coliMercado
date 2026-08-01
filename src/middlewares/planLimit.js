@@ -26,4 +26,22 @@ async function enforceProductLimit(req, res, next) {
     }
 }
 
-module.exports = enforceProductLimit;
+// Al bajar de plan (cancelación al vencer el periodo, o downgrade manual a
+// Free) el nuevo tope puede ser menor al catálogo activo actual. Desactiva
+// los agregados más recientes hasta calzar en el límite; conserva el
+// catálogo original del negocio. maxProducts NULL = ilimitado, no recorta.
+async function trimToLimit(storeId, maxProducts) {
+    if (maxProducts === null || maxProducts === undefined) return;
+    await pool.query(
+        `UPDATE products SET is_active = FALSE
+         WHERE id IN (
+             SELECT id FROM products
+             WHERE store_id = $1 AND is_active = TRUE
+             ORDER BY created_at ASC
+             OFFSET $2
+         )`,
+        [storeId, maxProducts]
+    );
+}
+
+module.exports = { enforceProductLimit, trimToLimit };

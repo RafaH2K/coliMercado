@@ -5,6 +5,11 @@ import { api, ApiError, imageUrl } from "../lib/api";
 import Receipt from "../components/Receipt";
 import type { CartItem, Order } from "../types";
 
+// Debe calzar con STRIPE_CARD_SURCHARGE en orders.controller.js: es solo para
+// mostrarle al cliente el total real antes de pagar con tarjeta, el cobro de
+// verdad lo define el backend en la sesión de Stripe.
+const CARD_SURCHARGE = 1.12;
+
 export default function Cart() {
     const navigate = useNavigate();
     const [items, setItems] = useState<CartItem[] | null>(null);
@@ -126,9 +131,12 @@ export default function Cart() {
                             {checkingOut ? "Procesando..." : "Pagar en persona"}
                         </button>
                         <button className="btn btn-primary" onClick={checkoutWithCard} disabled={checkingOut}>
-                            {checkingOut ? "Procesando..." : "Pagar con tarjeta"}
+                            {checkingOut
+                                ? "Procesando..."
+                                : `Pagar con tarjeta ($${(total * CARD_SURCHARGE).toFixed(2)})`}
                         </button>
                     </div>
+                    <p className="muted">Pagar con tarjeta incluye un 12% adicional. Paga en persona para evitarlo.</p>
                 </>
             )}
         </div>

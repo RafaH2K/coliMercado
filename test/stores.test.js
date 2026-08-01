@@ -1,7 +1,7 @@
 const test = require("node:test");
 const { after } = test;
 const assert = require("node:assert/strict");
-const { pool, createUser, createStore, cleanup, mockRes } = require("./fixtures");
+const { pool, createUser, createStore, createProduct, cleanup, mockRes } = require("./fixtures");
 const stores = require("../src/controllers/stores.controller");
 
 test("create: un negocio nuevo nace pendiente de aprobación", async (t) => {
@@ -89,6 +89,27 @@ test("setPlan: baja a Free y limpia la suscripción de Stripe activa", async (t)
     const { rows } = await pool.query(`SELECT plan_id, stripe_subscription_id FROM stores WHERE id = $1`, [storeId]);
     assert.equal(rows[0].plan_id, null);
     assert.equal(rows[0].stripe_subscription_id, null);
+});
+
+test("setPlan: baja a Free y recorta el catálogo activo al tope (conserva los más viejos)", async (t) => {
+    const userId = await createUser();
+    const storeId = await createStore(userId);
+    const productIds = [];
+    for (let i = 0; i < 7; i++) productIds.push(await createProduct(storeId)); // Pro: sin tope
+    t.after(() => cleanup({ userId, storeId, productId: productIds }));
+
+    const { rows: proPlan } = await pool.query(`SELECT id FROM plans WHERE code = 'pro'`);
+    await pool.query(`UPDATE stores SET plan_id = $1 WHERE id = $2`, [proPlan[0].id, storeId]);
+
+    await stores.setPlan({ store: { id: storeId }, body: { plan_code: "free" } }, mockRes());
+
+    const { rows } = await pool.query(
+        `SELECT is_active FROM products WHERE store_id = $1 ORDER BY created_at ASC`,
+        [storeId]
+    );
+    assert.equal(rows.filter((r) => r.is_active).length, 5, "solo deben quedar 5 activos (tope de Free)");
+    assert.ok(rows.slice(0, 5).every((r) => r.is_active), "los 5 más viejos deben conservarse activos");
+    assert.ok(rows.slice(5).every((r) => !r.is_active), "los más nuevos deben desactivarse");
 });
 
 test("setPlan: rechaza un plan de pago (debe ir por checkout-session)", async (t) => {

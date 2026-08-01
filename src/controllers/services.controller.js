@@ -52,7 +52,8 @@ async function listForStore(req, res) {
 }
 
 async function create(req, res) {
-    const { name, description, price, duration_minutes, buffer_minutes, capacity, category_id } = req.body;
+    const { name, description, price, duration_minutes, buffer_minutes, capacity, category_id, deposit_amount } =
+        req.body;
     if (!name || !name.trim()) {
         return res.status(400).json({ error: "El nombre del servicio es requerido" });
     }
@@ -62,11 +63,14 @@ async function create(req, res) {
     if (!Number.isInteger(duration_minutes) || duration_minutes <= 0) {
         return res.status(400).json({ error: "duration_minutes debe ser un entero positivo (minutos)" });
     }
+    if (deposit_amount !== undefined && deposit_amount !== null && !(Number(deposit_amount) >= 0)) {
+        return res.status(400).json({ error: "deposit_amount debe ser un número mayor o igual a 0" });
+    }
 
     try {
         const { rows } = await pool.query(
-            `INSERT INTO products (store_id, category_id, name, description, type, price, duration_minutes, buffer_minutes, capacity)
-             VALUES ($1, $2, $3, $4, 'service', $5, $6, $7, $8)
+            `INSERT INTO products (store_id, category_id, name, description, type, price, duration_minutes, buffer_minutes, capacity, deposit_amount)
+             VALUES ($1, $2, $3, $4, 'service', $5, $6, $7, $8, $9)
              RETURNING *`,
             [
                 req.store.id,
@@ -77,6 +81,7 @@ async function create(req, res) {
                 duration_minutes,
                 buffer_minutes || 0,
                 capacity || 1,
+                deposit_amount || null,
             ]
         );
         res.status(201).json(rows[0]);
@@ -89,8 +94,10 @@ async function create(req, res) {
 async function getById(req, res) {
     try {
         const { rows } = await pool.query(
-            `SELECT p.*, s.timezone AS store_timezone, ${IMAGES_SUBQUERY}
-             FROM products p JOIN stores s ON s.id = p.store_id
+            `SELECT p.*, s.timezone AS store_timezone,
+                    CASE WHEN pl.deposit_payments THEN p.deposit_amount ELSE NULL END AS deposit_amount,
+                    ${IMAGES_SUBQUERY}
+             FROM products p JOIN stores s ON s.id = p.store_id LEFT JOIN plans pl ON pl.id = s.plan_id
              WHERE p.id = $1 AND p.type = 'service' AND s.is_active = TRUE AND s.is_admin_approved = TRUE`,
             [req.params.id]
         );
@@ -103,7 +110,20 @@ async function getById(req, res) {
 }
 
 async function update(req, res) {
-    const { name, description, price, duration_minutes, buffer_minutes, capacity, is_active, category_id } = req.body;
+    const {
+        name,
+        description,
+        price,
+        duration_minutes,
+        buffer_minutes,
+        capacity,
+        is_active,
+        category_id,
+        deposit_amount,
+    } = req.body;
+    if (deposit_amount !== undefined && deposit_amount !== null && !(Number(deposit_amount) >= 0)) {
+        return res.status(400).json({ error: "deposit_amount debe ser un número mayor o igual a 0" });
+    }
     try {
         const { rows } = await pool.query(
             `UPDATE products SET
@@ -115,8 +135,9 @@ async function update(req, res) {
                 capacity = COALESCE($6, capacity),
                 is_active = COALESCE($7, is_active),
                 category_id = COALESCE($8, category_id),
+                deposit_amount = COALESCE($9, deposit_amount),
                 updated_at = NOW()
-             WHERE id = $9
+             WHERE id = $10
              RETURNING *`,
             [
                 name,
@@ -127,6 +148,7 @@ async function update(req, res) {
                 capacity,
                 is_active,
                 category_id,
+                deposit_amount,
                 req.service.id,
             ]
         );
@@ -192,9 +214,12 @@ async function availability(req, res) {
             return res.json({ slots: [] });
         }
 
+        // Un hold 'pendiente_pago' vigente (anticipo sin pagar todavía) también
+        // ocupa el horario, igual que en appointments.controller.js#create.
         const { rows: busyAppointments } = await pool.query(
             `SELECT starts_at AS start, ends_at AS "end" FROM appointments
-             WHERE product_id = $1 AND status IN ('pendiente','confirmada')
+             WHERE product_id = $1
+               AND (status IN ('pendiente','confirmada') OR (status = 'pendiente_pago' AND hold_expires_at > NOW()))
                AND starts_at < $3 AND ends_at > $2`,
             [service.id, dayStart, dayEnd]
         );

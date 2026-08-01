@@ -61,6 +61,31 @@ test("checkout: carrito vacío responde 400", async (t) => {
     assert.equal(res.statusCode, 400);
 });
 
+test("createCheckoutSession: cobra el precio con el recargo del 12% por tarjeta", async (t) => {
+    const userId = await createUser();
+    const storeId = await createStore(userId);
+    const productId = await createProduct(storeId, { price: 100, stock: 5 });
+    await pool.query(`INSERT INTO cart_items (user_id, product_id, quantity) VALUES ($1, $2, 2)`, [userId, productId]);
+    t.after(() => cleanup({ userId, storeId, productId }));
+
+    const originalCreate = stripe.checkout.sessions.create;
+    let sessionArgs = null;
+    stripe.checkout.sessions.create = async (args) => {
+        sessionArgs = args;
+        return { url: "https://checkout.stripe.test/fake" };
+    };
+    t.after(() => {
+        stripe.checkout.sessions.create = originalCreate;
+    });
+
+    const res = mockRes();
+    await orders.createCheckoutSession({ user: { id: userId } }, res);
+
+    assert.equal(res.body.url, "https://checkout.stripe.test/fake");
+    assert.equal(sessionArgs.line_items[0].price_data.unit_amount, 11200, "$100 + 12% = $112.00 -> 11200 centavos");
+    assert.equal(sessionArgs.line_items[0].quantity, 2);
+});
+
 test("confirmStripeSession: pago ya pagado con inventario agotado se reembolsa automáticamente", async (t) => {
     const userId = await createUser();
     const storeId = await createStore(userId);

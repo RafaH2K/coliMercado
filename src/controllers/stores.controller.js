@@ -4,6 +4,7 @@ const pool = require("../config/db");
 const stripe = require("../config/stripe");
 const { isValidTimeZone } = require("../lib/timezone");
 const { UPLOAD_DIR } = require("../config/upload");
+const { trimToLimit } = require("../middlewares/planLimit");
 
 async function create(req, res) {
     const { name, description, logo_url, timezone, city, phone } = req.body;
@@ -186,7 +187,9 @@ async function setPlan(req, res) {
         return res.status(400).json({ error: "plan_code es requerido" });
     }
     try {
-        const { rows: planRows } = await pool.query(`SELECT id, price_mxn FROM plans WHERE code = $1`, [plan_code]);
+        const { rows: planRows } = await pool.query(`SELECT id, price_mxn, max_products FROM plans WHERE code = $1`, [
+            plan_code,
+        ]);
         const plan = planRows[0];
         if (!plan) return res.status(400).json({ error: "Plan inválido" });
         if (Number(plan.price_mxn) > 0) {
@@ -211,6 +214,7 @@ async function setPlan(req, res) {
             `UPDATE stores SET plan_id = NULL, stripe_subscription_id = NULL WHERE id = $1 RETURNING *`,
             [req.store.id]
         );
+        await trimToLimit(req.store.id, plan.max_products);
         res.json(rows[0]);
     } catch (err) {
         console.error("stores.setPlan error:", err.message);

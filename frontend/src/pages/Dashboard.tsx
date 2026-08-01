@@ -3,7 +3,18 @@ import { Eye, ShoppingBag, Trash } from "@phosphor-icons/react";
 import { api, ApiError, imageUrl } from "../lib/api";
 import { formatDateTime } from "../lib/format";
 import { COUNTRIES, joinPhone, splitPhone } from "../lib/countries";
-import type { Appointment, BusinessHour, Category, Order, Plan, Product, Service, Store, StoreStats } from "../types";
+import type {
+    Appointment,
+    BusinessHour,
+    Category,
+    Order,
+    Plan,
+    Product,
+    Service,
+    Store,
+    StoreStats,
+    SubscriptionStatus,
+} from "../types";
 
 const DAYS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 const STATUSES: Appointment["status"][] = ["pendiente", "confirmada", "completada", "no_asistio", "cancelada"];
@@ -130,6 +141,12 @@ function StorePanel({ store: initialStore }: { store: Store }) {
     const [savingPhone, setSavingPhone] = useState(false);
     const fileInput = useRef<HTMLInputElement>(null);
     const [uploading, setUploading] = useState(false);
+    const [plans, setPlans] = useState<Plan[] | null>(null);
+
+    useEffect(() => {
+        api.get<Plan[]>("/plans").then(setPlans).catch(() => {});
+    }, []);
+    const isPro = plans?.find((p) => p.id === store.plan_id)?.code === "pro";
 
     async function handleLogoChange(e: React.ChangeEvent<HTMLInputElement>) {
         const file = e.target.files?.[0];
@@ -188,9 +205,10 @@ function StorePanel({ store: initialStore }: { store: Store }) {
             </label>
             <div className="card-stack">
                 <StatsPanel storeId={store.id} />
-                <PlanManager store={store} onChanged={setStore} />
+                <PlanManager store={store} plans={plans} onChanged={setStore} />
+                <CardSurchargeNotice />
                 <BusinessHoursEditor storeId={store.id} />
-                <ServicesManager storeId={store.id} />
+                <ServicesManager storeId={store.id} allowDeposits={isPro} />
                 <ProductsManager storeId={store.id} />
                 <AppointmentsManager storeId={store.id} storeTimezone={store.timezone} />
                 <OrdersManager storeId={store.id} />
@@ -278,16 +296,54 @@ const PLAN_PERKS: { key: keyof Plan; label: string }[] = [
     { key: "whatsapp_daily_summary", label: "Resumen diario de citas por WhatsApp" },
     { key: "whatsapp_cancellation_alerts", label: "Aviso inmediato por cancelación" },
     { key: "featured_placement", label: "Prioridad en resultados y home" },
+    { key: "deposit_payments", label: "Puede cobrar anticipo al reservar" },
 ];
 
-function PlanManager({ store, onChanged }: { store: Store; onChanged: (store: Store) => void }) {
-    const [plans, setPlans] = useState<Plan[] | null>(null);
+function PlanManager({
+    store,
+    plans,
+    onChanged,
+}: {
+    store: Store;
+    plans: Plan[] | null;
+    onChanged: (store: Store) => void;
+}) {
+    const [subscription, setSubscription] = useState<SubscriptionStatus | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [loadingCode, setLoadingCode] = useState<string | null>(null);
+    const [cancelBusy, setCancelBusy] = useState(false);
 
-    useEffect(() => {
-        api.get<Plan[]>("/plans").then(setPlans).catch(() => {});
-    }, []);
+    function loadSubscription() {
+        api.get<SubscriptionStatus>(`/stores/${store.id}/plan/subscription`).then(setSubscription).catch(() => {});
+    }
+
+    useEffect(loadSubscription, [store.id]);
+
+    async function cancelPlan() {
+        setCancelBusy(true);
+        setError(null);
+        try {
+            const updated = await api.post<SubscriptionStatus>(`/stores/${store.id}/plan/cancel`, {});
+            setSubscription((s) => (s ? { ...s, ...updated } : s));
+        } catch (err) {
+            setError(err instanceof ApiError ? err.message : "No se pudo cancelar el plan");
+        } finally {
+            setCancelBusy(false);
+        }
+    }
+
+    async function resumePlan() {
+        setCancelBusy(true);
+        setError(null);
+        try {
+            const updated = await api.post<SubscriptionStatus>(`/stores/${store.id}/plan/resume`, {});
+            setSubscription((s) => (s ? { ...s, ...updated } : s));
+        } catch (err) {
+            setError(err instanceof ApiError ? err.message : "No se pudo reactivar el plan");
+        } finally {
+            setCancelBusy(false);
+        }
+    }
 
     // Si volvemos de Stripe con ?plan_session_id=..., confirma la suscripción al
     // instante (el webhook la activa de todos modos si el dueño nunca vuelve).
@@ -296,7 +352,10 @@ function PlanManager({ store, onChanged }: { store: Store; onChanged: (store: St
         if (!sessionId) return;
         api
             .post<Store>(`/stores/${store.id}/plan/confirm`, { session_id: sessionId })
-            .then(onChanged)
+            .then((updated) => {
+                onChanged(updated);
+                loadSubscription();
+            })
             .catch((err) => setError(err instanceof ApiError ? err.message : "No se pudo confirmar el pago"))
             .finally(() => window.history.replaceState({}, "", "/mi-negocio"));
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -309,6 +368,7 @@ function PlanManager({ store, onChanged }: { store: Store; onChanged: (store: St
             if (code === "free") {
                 const updated = await api.patch<Store>(`/stores/${store.id}/plan`, { plan_code: code });
                 onChanged(updated);
+                loadSubscription();
             } else {
                 const { url } = await api.post<{ url: string }>(`/stores/${store.id}/plan/checkout-session`, {
                     plan_code: code,
@@ -345,9 +405,28 @@ function PlanManager({ store, onChanged }: { store: Store; onChanged: (store: St
                             </span>
                         ))}
                         {p.code === currentCode ? (
-                            <button className="btn btn-ghost btn-sm" disabled>
-                                Plan actual
-                            </button>
+                            p.code !== "free" && subscription?.subscribed ? (
+                                subscription.cancel_at_period_end ? (
+                                    <>
+                                        <span className="muted">
+                                            Se cancela el{" "}
+                                            {subscription.cancel_at &&
+                                                new Date(subscription.cancel_at * 1000).toLocaleDateString("es-MX")}
+                                        </span>
+                                        <button className="btn btn-primary btn-sm" onClick={resumePlan} disabled={cancelBusy}>
+                                            {cancelBusy ? "Procesando..." : "Reactivar"}
+                                        </button>
+                                    </>
+                                ) : (
+                                    <button className="btn btn-ghost btn-sm" onClick={cancelPlan} disabled={cancelBusy}>
+                                        {cancelBusy ? "Procesando..." : "Cancelar plan"}
+                                    </button>
+                                )
+                            ) : (
+                                <button className="btn btn-ghost btn-sm" disabled>
+                                    Plan actual
+                                </button>
+                            )
                         ) : (
                             <button
                                 className="btn btn-primary btn-sm"
@@ -360,6 +439,26 @@ function PlanManager({ store, onChanged }: { store: Store; onChanged: (store: St
                     </div>
                 ))}
             </div>
+        </section>
+    );
+}
+
+// Aviso fijo: informa la política de recargo por tarjeta (ver
+// STRIPE_CARD_SURCHARGE en orders.controller.js). No afecta lo que el
+// negocio ve en sus pedidos/ingresos, solo lo que paga el cliente con tarjeta.
+function CardSurchargeNotice() {
+    return (
+        <section className="card">
+            <h2>Pagos con tarjeta</h2>
+            <p className="muted">
+                Cuando un cliente paga con tarjeta (Stripe), se le cobra un 12% adicional sobre el precio: cubre la
+                comisión de Stripe y una comisión de la plataforma. Esto no afecta tus pedidos ni tus ingresos
+                reportados aquí, que siempre reflejan tu precio de lista.
+            </p>
+            <p className="muted">
+                Si prefieres que tus clientes no paguen ese recargo, puedes ofrecerles pagar en persona/efectivo
+                directamente contigo — eso ya queda entre tú y tu cliente.
+            </p>
         </section>
     );
 }
@@ -438,10 +537,19 @@ function BusinessHoursEditor({ storeId }: { storeId: string }) {
     );
 }
 
-function ServicesManager({ storeId }: { storeId: string }) {
+function ServicesManager({ storeId, allowDeposits }: { storeId: string; allowDeposits: boolean }) {
     const [services, setServices] = useState<Service[] | null>(null);
     const [categories, setCategories] = useState<Category[]>([]);
-    const [form, setForm] = useState({ name: "", description: "", price: "", duration_minutes: "30", buffer_minutes: "0", capacity: "1", category_id: "" });
+    const [form, setForm] = useState({
+        name: "",
+        description: "",
+        price: "",
+        duration_minutes: "30",
+        buffer_minutes: "0",
+        capacity: "1",
+        category_id: "",
+        deposit_amount: "",
+    });
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
 
@@ -467,8 +575,18 @@ function ServicesManager({ storeId }: { storeId: string }) {
                 buffer_minutes: Number(form.buffer_minutes),
                 capacity: Number(form.capacity),
                 category_id: form.category_id || undefined,
+                deposit_amount: allowDeposits && form.deposit_amount ? Number(form.deposit_amount) : undefined,
             });
-            setForm({ name: "", description: "", price: "", duration_minutes: "30", buffer_minutes: "0", capacity: "1", category_id: "" });
+            setForm({
+                name: "",
+                description: "",
+                price: "",
+                duration_minutes: "30",
+                buffer_minutes: "0",
+                capacity: "1",
+                category_id: "",
+                deposit_amount: "",
+            });
             load();
         } catch (err) {
             setError(err instanceof ApiError ? err.message : "No se pudo crear el servicio");
@@ -499,10 +617,26 @@ function ServicesManager({ storeId }: { storeId: string }) {
                 <input placeholder="Duración (min)" type="number" min="1" value={form.duration_minutes} onChange={(e) => setForm((f) => ({ ...f, duration_minutes: e.target.value }))} required />
                 <input placeholder="Colchón (min)" type="number" min="0" value={form.buffer_minutes} onChange={(e) => setForm((f) => ({ ...f, buffer_minutes: e.target.value }))} />
                 <input placeholder="Capacidad" type="number" min="1" value={form.capacity} onChange={(e) => setForm((f) => ({ ...f, capacity: e.target.value }))} />
+                {allowDeposits && (
+                    <input
+                        placeholder="Anticipo $ (opcional)"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={form.deposit_amount}
+                        onChange={(e) => setForm((f) => ({ ...f, deposit_amount: e.target.value }))}
+                    />
+                )}
                 <button className="btn btn-primary" type="submit" disabled={loading}>
                     {loading ? "Agregando..." : "Agregar servicio"}
                 </button>
             </form>
+            {allowDeposits && (
+                <p className="muted">
+                    El anticipo es obligatorio para reservar si lo defines: el cliente paga con tarjeta antes de que
+                    la cita se confirme.
+                </p>
+            )}
             {error && <p className="error">{error}</p>}
         </section>
     );
@@ -540,6 +674,9 @@ function ServiceRow({ service, onChanged }: { service: Service; onChanged: () =>
         <div className="service-row">
             <strong>{service.name}</strong> · ${service.price} · {service.duration_minutes} min · capacidad{" "}
             {service.capacity}
+            {!!service.deposit_amount && Number(service.deposit_amount) > 0 && (
+                <> · anticipo ${service.deposit_amount}</>
+            )}
             <div className="gallery">
                 {service.images?.map((img) => (
                     <div key={img.id} className="gallery-item">
