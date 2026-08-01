@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Clock, Star, MapPin } from "@phosphor-icons/react";
-import { api, ApiError, imageUrl } from "../lib/api";
+import { api, imageUrl } from "../lib/api";
 import { useDebouncedFilters } from "../lib/useDebouncedFilters";
 import { usePaginatedList } from "../lib/usePaginatedList";
 import { SearchFilters } from "../components/SearchFilters";
