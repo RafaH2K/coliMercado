@@ -51,6 +51,22 @@ test("POST /auth/register + POST /auth/login: ciclo completo vía HTTP", async (
     assert.ok(loginBody.token);
 });
 
+test("CORS: un origen listado en CORS_ORIGIN recibe Access-Control-Allow-Origin", async (t) => {
+    const allowedOrigin = process.env.CORS_ORIGIN.split(",")[0].trim();
+    const res = await fetch(`${baseUrl}/categories`, {
+        headers: { Origin: allowedOrigin },
+    });
+    assert.equal(res.headers.get("access-control-allow-origin"), allowedOrigin);
+});
+
+test("CORS: un origen que no está en la lista es rechazado", async (t) => {
+    const res = await fetch(`${baseUrl}/categories`, {
+        headers: { Origin: "https://origen-no-permitido.example.com" },
+    });
+    assert.equal(res.headers.get("access-control-allow-origin"), null);
+    assert.notEqual(res.status, 200);
+});
+
 test("GET /stores/mine sin token responde 401 (requireAuth real, vía HTTP)", async (t) => {
     const res = await fetch(`${baseUrl}/stores/mine`);
     assert.equal(res.status, 401);

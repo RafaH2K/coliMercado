@@ -20,7 +20,24 @@ const { UPLOAD_DIR } = require("./config/upload");
 const app = express();
 
 app.use(helmet());
-app.use(cors({ origin: process.env.CORS_ORIGIN, credentials: true }));
+// CORS_ORIGIN acepta uno o varios orígenes separados por coma (ej. tu app en
+// local + la desplegada en Vercel), para no tener que cambiar la variable de
+// entorno cada vez que se prueba contra uno u otro.
+const allowedOrigins = (process.env.CORS_ORIGIN || "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+app.use(
+    cors({
+        origin: (origin, callback) => {
+            // Sin header Origin (curl, llamadas servidor-a-servidor) o coincide
+            // con la lista permitida.
+            if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+            callback(new Error("Origen no permitido por CORS"));
+        },
+        credentials: true,
+    })
+);
 app.use(morgan("dev"));
 
 // Stripe firma el cuerpo crudo de la petición para verificar que el webhook

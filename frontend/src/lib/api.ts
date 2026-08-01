@@ -1,4 +1,16 @@
-const BASE_URL = import.meta.env.VITE_API_URL as string;
+// Quita una barra final si la pegaron (ej. ".../api/"): sin esto, path que ya
+// empieza con "/" produce URLs con doble barra ("...api//stores").
+const BASE_URL = (import.meta.env.VITE_API_URL as string)?.replace(/\/$/, "");
+if (!BASE_URL) {
+    // Sin esto, el error real queda enterrado como "Cannot read properties of
+    // undefined (reading 'replace')" en el bundle minificado — imposible de
+    // diagnosticar en producción. VITE_API_URL se lee en build time: hay que
+    // configurarla en las variables de entorno del hosting (ej. Vercel), no
+    // solo en el .env local (ese nunca llega al build de producción).
+    throw new Error(
+        "VITE_API_URL no está definida. Configúrala en las variables de entorno de tu despliegue (ej. Vercel > Project Settings > Environment Variables) y vuelve a desplegar."
+    );
+}
 // El backend sirve /uploads fuera de /api, así que las URLs de imágenes
 // relativas ("/uploads/x.png") necesitan el host sin el sufijo /api.
 export const FILES_BASE_URL = BASE_URL.replace(/\/api\/?$/, "");
