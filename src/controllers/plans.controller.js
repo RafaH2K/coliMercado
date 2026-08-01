@@ -1,5 +1,6 @@
 const pool = require("../config/db");
 const stripe = require("../config/stripe");
+const { frontendUrl } = require("../lib/frontendUrl");
 const { trimToLimit } = require("../middlewares/planLimit");
 
 async function list(req, res) {
@@ -121,7 +122,7 @@ async function createCheckoutSession(req, res) {
             await pool.query(`UPDATE stores SET stripe_customer_id = $1 WHERE id = $2`, [customerId, req.store.id]);
         }
 
-        const frontendUrl = process.env.CORS_ORIGIN;
+        const frontend = frontendUrl();
         const session = await stripe.checkout.sessions.create({
             mode: "subscription",
             customer: customerId,
@@ -138,8 +139,8 @@ async function createCheckoutSession(req, res) {
             ],
             metadata: { store_id: req.store.id, plan_code },
             subscription_data: { metadata: { store_id: req.store.id, plan_code } },
-            success_url: `${frontendUrl}/mi-negocio?plan_session_id={CHECKOUT_SESSION_ID}`,
-            cancel_url: `${frontendUrl}/mi-negocio`,
+            success_url: `${frontend}/mi-negocio?plan_session_id={CHECKOUT_SESSION_ID}`,
+            cancel_url: `${frontend}/mi-negocio`,
         });
         res.json({ url: session.url });
     } catch (err) {

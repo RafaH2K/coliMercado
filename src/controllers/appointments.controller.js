@@ -1,6 +1,7 @@
 const pool = require("../config/db");
 const stripe = require("../config/stripe");
 const { sendEmail } = require("../config/email");
+const { frontendUrl } = require("../lib/frontendUrl");
 // WhatsApp: descomentar junto con notifyCancellationAlert() de abajo y con
 // WHATSAPP_TOKEN/WHATSAPP_PHONE_NUMBER_ID en .env.
 // const { sendCancellationAlert } = require("../lib/whatsappNotifications");
@@ -175,7 +176,7 @@ async function create(req, res) {
     // el cobro. Si Stripe falla, se borra el hold para no dejar el horario
     // bloqueado 10 minutos por nada.
     try {
-        const frontendUrl = process.env.CORS_ORIGIN;
+        const frontend = frontendUrl();
         const session = await stripe.checkout.sessions.create({
             mode: "payment",
             line_items: [
@@ -189,8 +190,8 @@ async function create(req, res) {
                 },
             ],
             metadata: { kind: "appointment_deposit", appointment_id: appointment.id },
-            success_url: `${frontendUrl}/mis-citas?deposit_session_id={CHECKOUT_SESSION_ID}`,
-            cancel_url: `${frontendUrl}/servicios/${product_id}`,
+            success_url: `${frontend}/mis-citas?deposit_session_id={CHECKOUT_SESSION_ID}`,
+            cancel_url: `${frontend}/servicios/${product_id}`,
         });
         res.status(201).json({ requires_payment: true, checkout_url: session.url, appointment_id: appointment.id });
     } catch (err) {

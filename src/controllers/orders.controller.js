@@ -1,6 +1,7 @@
 const pool = require("../config/db");
 const stripe = require("../config/stripe");
 const { sendEmail } = require("../config/email");
+const { frontendUrl } = require("../lib/frontendUrl");
 const plans = require("./plans.controller");
 const appointments = require("./appointments.controller");
 
@@ -160,7 +161,7 @@ async function createCheckoutSession(req, res) {
             return res.status(409).json({ error: "Un producto de tu carrito ya no está disponible" });
         }
 
-        const frontendUrl = process.env.CORS_ORIGIN;
+        const frontend = frontendUrl();
         const session = await stripe.checkout.sessions.create({
             mode: "payment",
             line_items: cartRows.map((item) => ({
@@ -172,8 +173,8 @@ async function createCheckoutSession(req, res) {
                 },
             })),
             metadata: { user_id: req.user.id },
-            success_url: `${frontendUrl}/carrito/exito?session_id={CHECKOUT_SESSION_ID}`,
-            cancel_url: `${frontendUrl}/carrito`,
+            success_url: `${frontend}/carrito/exito?session_id={CHECKOUT_SESSION_ID}`,
+            cancel_url: `${frontend}/carrito`,
         });
         res.json({ url: session.url });
     } catch (err) {

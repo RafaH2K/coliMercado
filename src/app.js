@@ -19,6 +19,12 @@ const { UPLOAD_DIR } = require("./config/upload");
 
 const app = express();
 
+// En producción corre detrás de un solo proxy (Railway/Render/etc.), que es
+// quien pone X-Forwarded-For; sin esto, express-rate-limit rechaza confiar en
+// ese header (podría venir falsificado por el cliente) y tumba cualquier ruta
+// con rate limit. "1" = confiar solo en ese primer salto, no en toda la cadena.
+app.set("trust proxy", 1);
+
 app.use(helmet());
 // CORS_ORIGIN acepta uno o varios orígenes separados por coma (ej. tu app en
 // local + la desplegada en Vercel), para no tener que cambiar la variable de

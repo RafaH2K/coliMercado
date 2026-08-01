@@ -3,6 +3,7 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const pool = require("../config/db");
 const { sendEmail } = require("../config/email");
+const { frontendUrl } = require("../lib/frontendUrl");
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const SALT_ROUNDS = 12;
@@ -96,7 +97,7 @@ async function forgotPassword(req, res) {
             user.id,
         ]);
 
-        const resetUrl = `${process.env.CORS_ORIGIN}/restablecer-password?token=${token}`;
+        const resetUrl = `${frontendUrl()}/restablecer-password?token=${token}`;
         await sendEmail({
             to: email,
             subject: "Restablece tu contraseña en colimaMerrcado",
