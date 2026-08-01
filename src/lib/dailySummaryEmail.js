@@ -1,5 +1,5 @@
 const pool = require("../config/db");
-const { sendEmail } = require("../config/email");
+const email = require("../config/email");
 const { zonedTimeToUtc, addDays } = require("./timezone");
 
 function todayInZone(timeZone) {
@@ -44,7 +44,7 @@ async function sendDailySummaryEmail(store) {
               .join("")}</ul>`
         : "<p>Sin citas/reservaciones.</p>";
 
-    await sendEmail({
+    await email.sendEmail({
         to: store.owner_email,
         subject: `Resumen de citas para ${label} en ${store.name}`,
         html: `<p>Resumen de citas para <strong>${label}</strong> en ${store.name}:</p>${itemsHtml}`,

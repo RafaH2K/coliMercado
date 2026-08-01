@@ -23,14 +23,39 @@ async function activateSubscription(session) {
     const { rows: planRows } = await pool.query(`SELECT id, max_products FROM plans WHERE code = $1`, [planCode]);
     const plan = planRows[0];
     if (!plan) return;
-    await pool.query(`UPDATE stores SET plan_id = $1, stripe_subscription_id = $2 WHERE id = $3`, [
-        plan.id,
-        session.subscription,
-        storeId,
-    ]);
+
+    // CTE + UPDATE en un solo statement: leer el valor viejo y escribir el
+    // nuevo queda atómico (el lock de fila de Postgres serializa dos
+    // llamadas concurrentes), así que si el webhook y la confirmación del
+    // navegador procesan la misma sesión casi a la vez, la segunda ve el
+    // subscription_id que la primera acaba de escribir como "el anterior" —
+    // no intenta cancelar la misma suscripción dos veces.
+    const { rows: updatedRows } = await pool.query(
+        `WITH previous AS (SELECT stripe_subscription_id FROM stores WHERE id = $3)
+         UPDATE stores SET plan_id = $1, stripe_subscription_id = $2
+         WHERE id = $3
+         RETURNING (SELECT stripe_subscription_id FROM previous) AS previous_subscription_id`,
+        [plan.id, session.subscription, storeId]
+    );
+    const previousSubscriptionId = updatedRows[0]?.previous_subscription_id;
+
     // Cambiar a un plan de pago más limitado (ej. Pro -> Básico) también puede
     // dejar el catálogo activo por encima del nuevo tope.
     await trimToLimit(storeId, plan.max_products);
+
+    // Si venía de otro plan de pago, esa suscripción vieja se cancela HASTA
+    // AHORA (con la nueva ya activa) — no antes de crear el checkout, para
+    // no dejar una ventana donde el negocio se ve "sin plan": ese hueco
+    // dispararía customer.subscription.deleted y downgradeToFree recortaría
+    // el catálogo a Free de paso, aunque el dueño esté subiendo de plan.
+    // ponytail: sin prorrateo del tiempo no usado del plan anterior.
+    if (previousSubscriptionId && previousSubscriptionId !== session.subscription) {
+        try {
+            await stripe.subscriptions.cancel(previousSubscriptionId);
+        } catch (err) {
+            console.error("plans.activateSubscription: no se pudo cancelar la suscripción anterior:", err.message);
+        }
+    }
 }
 
 // Un negocio con una suscripción cuyo estado ya no es activo (falló el cobro
@@ -80,23 +105,15 @@ async function createCheckoutSession(req, res) {
         }
 
         const { rows: storeRows } = await pool.query(
-            `SELECT stripe_customer_id, stripe_subscription_id FROM stores WHERE id = $1`,
+            `SELECT stripe_customer_id FROM stores WHERE id = $1`,
             [req.store.id]
         );
         const store = storeRows[0];
 
-        // Cambiar de un plan de pago a otro: se cancela la suscripción vigente
-        // antes de iniciar la nueva, para no cobrar dos planes a la vez.
-        // ponytail: sin prorrateo del periodo restante; si eso importa, migrar
-        // a stripe.subscriptions.update() con el price nuevo en vez de cancelar+crear.
-        if (store.stripe_subscription_id) {
-            try {
-                await stripe.subscriptions.cancel(store.stripe_subscription_id);
-            } catch (err) {
-                console.error("plans.createCheckoutSession: no se pudo cancelar la suscripción anterior:", err.message);
-            }
-        }
-
+        // La suscripción anterior (si cambia de un plan de pago a otro) se
+        // cancela hasta que la nueva quede activa (ver activateSubscription),
+        // no aquí: cancelarla antes dejaría al negocio momentáneamente "sin
+        // plan" mientras completa el pago.
         let customerId = store.stripe_customer_id;
         if (!customerId) {
             const customer = await stripe.customers.create({ metadata: { store_id: req.store.id } });

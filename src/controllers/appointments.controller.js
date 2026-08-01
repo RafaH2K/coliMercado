@@ -235,21 +235,34 @@ async function activateDeposit(session) {
             [appt.product_id, appt.id, appt.starts_at, appt.ends_at]
         );
         if (busyRows[0].count >= (appt.capacity_snapshot || 1)) {
-            await pool.query(`UPDATE appointments SET status = 'cancelada', updated_at = NOW() WHERE id = $1`, [appt.id]);
-            try {
-                if (session.payment_intent) await stripe.refunds.create({ payment_intent: session.payment_intent });
-            } catch (err) {
-                console.error("appointments.activateDeposit: fallo el reembolso:", err.message);
+            // WHERE status='pendiente_pago' hace esto un compare-and-swap: si el
+            // webhook y la confirmación del navegador llegan casi a la vez, solo
+            // uno de los dos "gana" la fila y dispara el reembolso una sola vez.
+            const { rows: canceled } = await pool.query(
+                `UPDATE appointments SET status = 'cancelada', updated_at = NOW()
+                 WHERE id = $1 AND status = 'pendiente_pago' RETURNING id`,
+                [appt.id]
+            );
+            if (canceled[0] && session.payment_intent) {
+                try {
+                    await stripe.refunds.create({ payment_intent: session.payment_intent });
+                } catch (err) {
+                    console.error("appointments.activateDeposit: fallo el reembolso:", err.message);
+                }
             }
             return;
         }
     }
 
-    await pool.query(
+    // Mismo compare-and-swap: evita notificar dos veces si el webhook y la
+    // confirmación del navegador procesan la misma sesión casi a la vez.
+    const { rows: activated } = await pool.query(
         `UPDATE appointments SET status = 'pendiente', hold_expires_at = NULL, stripe_payment_intent_id = $1, updated_at = NOW()
-         WHERE id = $2`,
+         WHERE id = $2 AND status = 'pendiente_pago' RETURNING id`,
         [session.payment_intent, appt.id]
     );
+    if (!activated[0]) return;
+
     notifyNewAppointment({
         ownerEmail: appt.owner_email,
         storeName: appt.store_name,
@@ -336,7 +349,7 @@ async function updateStatus(req, res) {
 
     try {
         const { rows } = await pool.query(
-            `SELECT a.id, a.customer_id, a.stripe_payment_intent_id, u.email AS customer_email, s.owner_id, p.name AS service_name
+            `SELECT a.id, a.customer_id, a.status, a.stripe_payment_intent_id, u.email AS customer_email, s.owner_id, p.name AS service_name
              FROM appointments a
              JOIN products p ON p.id = a.product_id
              JOIN stores s ON s.id = p.store_id
@@ -360,8 +373,9 @@ async function updateStatus(req, res) {
         );
 
         // Anticipo pagado + cancelación (por cualquiera de las dos partes) =
-        // reembolso automático, como se pidió.
-        if (status === "cancelada" && appt.stripe_payment_intent_id) {
+        // reembolso automático, como se pidió. appt.status !== "cancelada" evita
+        // reintentar el reembolso si ya estaba cancelada (ej. doble click).
+        if (status === "cancelada" && appt.status !== "cancelada" && appt.stripe_payment_intent_id) {
             try {
                 await stripe.refunds.create({ payment_intent: appt.stripe_payment_intent_id });
             } catch (err) {

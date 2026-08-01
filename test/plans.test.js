@@ -50,7 +50,7 @@ test("createCheckoutSession: rechaza el plan Free (no hay nada que cobrar)", asy
     assert.equal(res.statusCode, 400);
 });
 
-test("createCheckoutSession: cancela la suscripción anterior antes de iniciar el cambio de plan", async (t) => {
+test("createCheckoutSession: NO cancela la suscripción anterior (evita el hueco 'sin plan' mientras se paga)", async (t) => {
     const userId = await createUser();
     const storeId = await createStore(userId);
     await pool.query(
@@ -61,10 +61,10 @@ test("createCheckoutSession: cancela la suscripción anterior antes de iniciar e
 
     const originalCreate = stripe.checkout.sessions.create;
     const originalCancel = stripe.subscriptions.cancel;
-    let canceledId = null;
+    let cancelCalled = false;
     stripe.checkout.sessions.create = async () => ({ url: "https://checkout.stripe.test/fake" });
     stripe.subscriptions.cancel = async (id) => {
-        canceledId = id;
+        cancelCalled = true;
         return { id };
     };
     t.after(() => {
@@ -76,7 +76,10 @@ test("createCheckoutSession: cancela la suscripción anterior antes de iniciar e
     await plans.createCheckoutSession({ store: { id: storeId }, body: { plan_code: "basico" } }, res);
 
     assert.equal(res.statusCode, 200);
-    assert.equal(canceledId, "sub_test_anterior");
+    assert.equal(cancelCalled, false, "la suscripción vieja debe seguir activa hasta que la nueva se confirme");
+
+    const { rows } = await pool.query(`SELECT stripe_subscription_id FROM stores WHERE id = $1`, [storeId]);
+    assert.equal(rows[0].stripe_subscription_id, "sub_test_anterior", "no debe tocarse hasta activateSubscription");
 });
 
 test("handleSubscriptionCheckoutCompleted: activa el plan del negocio al confirmarse el pago", async (t) => {
@@ -94,6 +97,41 @@ test("handleSubscriptionCheckoutCompleted: activa el plan del negocio al confirm
         [storeId]
     );
     assert.equal(rows[0].code, "basico");
+    assert.equal(rows[0].stripe_subscription_id, "sub_test_nuevo");
+});
+
+test("handleSubscriptionCheckoutCompleted: al cambiar de plan, cancela la suscripción vieja DESPUÉS de activar la nueva (no antes)", async (t) => {
+    const userId = await createUser();
+    const storeId = await createStore(userId);
+    const { rows: proPlan } = await pool.query(`SELECT id FROM plans WHERE code = 'pro'`);
+    await pool.query(`UPDATE stores SET plan_id = $1, stripe_subscription_id = 'sub_test_viejo' WHERE id = $2`, [
+        proPlan[0].id,
+        storeId,
+    ]);
+    t.after(() => cleanup({ userId, storeId }));
+
+    const originalCancel = stripe.subscriptions.cancel;
+    let canceledId = null;
+    stripe.subscriptions.cancel = async (id) => {
+        canceledId = id;
+        return { id };
+    };
+    t.after(() => {
+        stripe.subscriptions.cancel = originalCancel;
+    });
+
+    await plans.handleSubscriptionCheckoutCompleted({
+        subscription: "sub_test_nuevo",
+        metadata: { store_id: storeId, plan_code: "basico" },
+    });
+
+    assert.equal(canceledId, "sub_test_viejo", "debe cancelar la vieja, no la recién activada");
+
+    const { rows } = await pool.query(
+        `SELECT pl.code, s.stripe_subscription_id FROM stores s JOIN plans pl ON pl.id = s.plan_id WHERE s.id = $1`,
+        [storeId]
+    );
+    assert.equal(rows[0].code, "basico", "el plan nuevo debe quedar activo, no verse afectado por la cancelación");
     assert.equal(rows[0].stripe_subscription_id, "sub_test_nuevo");
 });
 

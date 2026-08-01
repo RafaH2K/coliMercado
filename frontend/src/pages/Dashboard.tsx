@@ -293,8 +293,10 @@ function StatsPanel({ storeId }: { storeId: string }) {
 
 // Beneficios que distinguen a cada plan (max_products ya se muestra aparte).
 const PLAN_PERKS: { key: keyof Plan; label: string }[] = [
-    { key: "whatsapp_daily_summary", label: "Resumen diario de citas por WhatsApp" },
-    { key: "whatsapp_cancellation_alerts", label: "Aviso inmediato por cancelación" },
+    // Por ahora se manda por correo (ver dailySummaryScheduler.js); WhatsApp
+    // llega en una actualización futura, cuando haya credenciales de Meta.
+    { key: "whatsapp_daily_summary", label: "Resumen diario de citas por correo" },
+    { key: "whatsapp_cancellation_alerts", label: "Aviso inmediato por cancelación (próximamente, WhatsApp)" },
     { key: "featured_placement", label: "Prioridad en resultados y home" },
     { key: "deposit_payments", label: "Puede cobrar anticipo al reservar" },
 ];
