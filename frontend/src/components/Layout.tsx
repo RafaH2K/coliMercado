@@ -15,7 +15,7 @@ export default function Layout() {
         <div className="app-shell">
             <nav className="nav">
                 <Link to="/" className="brand">
-                    colimaMerrcado
+                    Mercol
                 </Link>
                 <div className="nav-links">
                     <div className="nav-group">
