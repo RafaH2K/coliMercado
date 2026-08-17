@@ -14,6 +14,7 @@ const favoritesRoutes = require("./routes/favorites.routes");
 const cartRoutes = require("./routes/cart.routes");
 const ordersRoutes = require("./routes/orders.routes");
 const adminRoutes = require("./routes/admin.routes");
+const mercadopagoRoutes = require("./routes/mercadopago.routes");
 const { handleStripeWebhook } = require("./controllers/orders.controller");
 const { UPLOAD_DIR } = require("./config/upload");
 
@@ -77,6 +78,7 @@ app.use("/api/favorites", favoritesRoutes);
 app.use("/api/cart", cartRoutes);
 app.use("/api/orders", ordersRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/mercadopago", mercadopagoRoutes);
 
 app.get("/", (req, res) => {
     res.send("server responde hola");

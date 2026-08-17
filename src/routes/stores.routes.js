@@ -11,6 +11,7 @@ const products = require("../controllers/products.controller");
 const appointments = require("../controllers/appointments.controller");
 const orders = require("../controllers/orders.controller");
 const reviews = require("../controllers/reviews.controller");
+const mercadopago = require("../controllers/mercadopago.controller");
 const { handleUpload } = require("../config/upload");
 
 const router = Router();
@@ -28,6 +29,10 @@ router.post("/:storeId/plan/cancel", requireAuth, requireStoreOwner, plans.cance
 router.post("/:storeId/plan/resume", requireAuth, requireStoreOwner, plans.resumeSubscription);
 router.post("/:storeId/logo", requireAuth, requireStoreOwner, handleUpload("logo"), stores.uploadLogo);
 router.get("/:storeId/stats", requireAuth, requireStoreOwner, stores.getStats);
+
+router.get("/:storeId/mercadopago/connect", requireAuth, requireStoreOwner, mercadopago.connect);
+router.get("/:storeId/mercadopago/status", requireAuth, requireStoreOwner, mercadopago.status);
+router.delete("/:storeId/mercadopago", requireAuth, requireStoreOwner, mercadopago.disconnect);
 
 router.get("/:storeId/business-hours", businessHours.getForStore);
 router.put("/:storeId/business-hours", requireAuth, requireStoreOwner, businessHours.replaceForStore);

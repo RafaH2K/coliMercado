@@ -210,6 +210,7 @@ function StorePanel({ store: initialStore }: { store: Store }) {
             <div className="card-stack">
                 <StatsPanel storeId={store.id} />
                 <PlanManager store={store} plans={plans} onChanged={setStore} />
+                <MercadoPagoConnect storeId={store.id} />
                 <CardSurchargeNotice />
                 <BusinessHoursEditor storeId={store.id} />
                 <ScheduleExceptionsManager storeId={store.id} storeTimezone={store.timezone} />
@@ -446,6 +447,88 @@ function PlanManager({
                     </div>
                 ))}
             </div>
+        </section>
+    );
+}
+
+function MercadoPagoConnect({ storeId }: { storeId: string }) {
+    const [connected, setConnected] = useState<boolean | null>(null);
+    const [notice, setNotice] = useState<string | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [busy, setBusy] = useState(false);
+
+    function loadStatus() {
+        api
+            .get<{ connected: boolean }>(`/stores/${storeId}/mercadopago/status`)
+            .then((s) => setConnected(s.connected))
+            .catch(() => {});
+    }
+
+    useEffect(loadStatus, [storeId]);
+
+    // Si volvemos de Mercado Pago con ?mercadopago=connected|error, refresca
+    // el estado y limpia la URL (mismo patrón que PlanManager con plan_session_id).
+    useEffect(() => {
+        const result = new URLSearchParams(window.location.search).get("mercadopago");
+        if (!result) return;
+        setNotice(
+            result === "connected"
+                ? "Tu cuenta de Mercado Pago quedó conectada."
+                : "No se pudo conectar con Mercado Pago, intenta de nuevo."
+        );
+        loadStatus();
+        window.history.replaceState({}, "", "/mi-negocio");
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    async function connect() {
+        setBusy(true);
+        setError(null);
+        try {
+            const { url } = await api.get<{ url: string }>(`/stores/${storeId}/mercadopago/connect`);
+            window.location.href = url;
+        } catch (err) {
+            setError(err instanceof ApiError ? err.message : "No se pudo iniciar la conexión con Mercado Pago");
+            setBusy(false);
+        }
+    }
+
+    async function disconnect() {
+        setBusy(true);
+        setError(null);
+        try {
+            await api.delete(`/stores/${storeId}/mercadopago`);
+            setConnected(false);
+        } catch (err) {
+            setError(err instanceof ApiError ? err.message : "No se pudo desconectar Mercado Pago");
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    return (
+        <section className="card">
+            <h2>Mercado Pago</h2>
+            <p className="muted">
+                Conecta tu cuenta de Mercado Pago para recibir directo el pago de tus productos y citas. La
+                plataforma se queda con una comisión, tú recibes el resto directo en tu cuenta.
+            </p>
+            {notice && <p>{notice}</p>}
+            {error && <p className="error">{error}</p>}
+            {connected === null ? (
+                <p className="muted">Cargando...</p>
+            ) : connected ? (
+                <div className="inline-form">
+                    <span className="badge badge-confirmada">Conectado</span>
+                    <button className="btn btn-ghost btn-sm" onClick={disconnect} disabled={busy}>
+                        {busy ? "Procesando..." : "Desconectar"}
+                    </button>
+                </div>
+            ) : (
+                <button className="btn btn-primary" onClick={connect} disabled={busy}>
+                    {busy ? "Redirigiendo..." : "Conectar con Mercado Pago"}
+                </button>
+            )}
         </section>
     );
 }

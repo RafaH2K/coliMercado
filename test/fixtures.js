@@ -74,6 +74,7 @@ function mockRes() {
     res.status = (code) => { res.statusCode = code; return res; };
     res.json = (body) => { res.body = body; return res; };
     res.send = (body) => { res.body = body; return res; };
+    res.redirect = (url) => { res.redirectedTo = url; return res; };
     return res;
 }
 
