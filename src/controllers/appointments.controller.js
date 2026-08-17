@@ -321,7 +321,7 @@ async function listMine(req, res) {
              JOIN products p ON p.id = a.product_id
              JOIN stores s ON s.id = p.store_id
              WHERE a.customer_id = $1 AND a.status != 'pendiente_pago'
-             ORDER BY a.starts_at DESC`,
+             ORDER BY a.starts_at ASC`,
             [req.user.id]
         );
         res.json(rows);
@@ -341,7 +341,7 @@ async function listForStore(req, res) {
              JOIN users u ON u.id = a.customer_id
              JOIN stores s ON s.id = p.store_id
              WHERE p.store_id = $1 AND a.status != 'pendiente_pago'
-             ORDER BY a.starts_at DESC`,
+             ORDER BY a.starts_at ASC`,
             [req.store.id]
         );
         res.json(rows);

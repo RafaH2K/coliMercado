@@ -5,6 +5,7 @@ const { enforceProductLimit } = require("../middlewares/planLimit");
 const stores = require("../controllers/stores.controller");
 const plans = require("../controllers/plans.controller");
 const businessHours = require("../controllers/businessHours.controller");
+const scheduleExceptions = require("../controllers/scheduleExceptions.controller");
 const services = require("../controllers/services.controller");
 const products = require("../controllers/products.controller");
 const appointments = require("../controllers/appointments.controller");
@@ -30,6 +31,14 @@ router.get("/:storeId/stats", requireAuth, requireStoreOwner, stores.getStats);
 
 router.get("/:storeId/business-hours", businessHours.getForStore);
 router.put("/:storeId/business-hours", requireAuth, requireStoreOwner, businessHours.replaceForStore);
+
+router.get("/:storeId/special-dates", scheduleExceptions.listSpecialDates);
+router.post("/:storeId/special-dates", requireAuth, requireStoreOwner, scheduleExceptions.upsertSpecialDate);
+router.delete("/:storeId/special-dates/:id", requireAuth, requireStoreOwner, scheduleExceptions.deleteSpecialDate);
+
+router.get("/:storeId/blocked-slots", scheduleExceptions.listBlockedSlots);
+router.post("/:storeId/blocked-slots", requireAuth, requireStoreOwner, scheduleExceptions.createBlockedSlot);
+router.delete("/:storeId/blocked-slots/:id", requireAuth, requireStoreOwner, scheduleExceptions.deleteBlockedSlot);
 
 router.get("/:storeId/services", services.listForStore);
 router.post("/:storeId/services", requireAuth, requireStoreOwner, enforceProductLimit, services.create);

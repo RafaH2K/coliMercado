@@ -1,16 +1,19 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Eye, ShoppingBag, Trash } from "@phosphor-icons/react";
+import { ChatCircle, Eye, ShoppingBag, Trash } from "@phosphor-icons/react";
 import { api, ApiError, imageUrl } from "../lib/api";
-import { formatDateTime, orderFolio } from "../lib/format";
+import { formatDateTime, formatTime, orderFolio } from "../lib/format";
 import { COUNTRIES, joinPhone, splitPhone } from "../lib/countries";
+import ChatPanel from "../components/ChatPanel";
 import type {
     Appointment,
+    BlockedSlot,
     BusinessHour,
     Category,
     Order,
     Plan,
     Product,
     Service,
+    SpecialDate,
     Store,
     StoreStats,
     SubscriptionStatus,
@@ -209,6 +212,7 @@ function StorePanel({ store: initialStore }: { store: Store }) {
                 <PlanManager store={store} plans={plans} onChanged={setStore} />
                 <CardSurchargeNotice />
                 <BusinessHoursEditor storeId={store.id} />
+                <ScheduleExceptionsManager storeId={store.id} storeTimezone={store.timezone} />
                 <ServicesManager storeId={store.id} allowDeposits={isPro} />
                 <ProductsManager storeId={store.id} />
                 <AppointmentsManager storeId={store.id} storeTimezone={store.timezone} />
@@ -595,6 +599,169 @@ function BusinessHoursEditor({ storeId }: { storeId: string }) {
     );
 }
 
+function ScheduleExceptionsManager({ storeId, storeTimezone }: { storeId: string; storeTimezone: string }) {
+    return (
+        <section className="card">
+            <h2>Excepciones de horario</h2>
+            <p className="muted">
+                Para cerrar un día festivo completo, o bloquear un hueco puntual dentro de un día que ya está
+                habilitado.
+            </p>
+            <SpecialDatesEditor storeId={storeId} />
+            <BlockedSlotsEditor storeId={storeId} storeTimezone={storeTimezone} />
+        </section>
+    );
+}
+
+function SpecialDatesEditor({ storeId }: { storeId: string }) {
+    const [dates, setDates] = useState<SpecialDate[] | null>(null);
+    const [date, setDate] = useState("");
+    const [closed, setClosed] = useState(true);
+    const [startTime, setStartTime] = useState("09:00");
+    const [endTime, setEndTime] = useState("18:00");
+    const [reason, setReason] = useState("");
+    const [error, setError] = useState<string | null>(null);
+    const [loading, setLoading] = useState(false);
+
+    function load() {
+        api.get<SpecialDate[]>(`/stores/${storeId}/special-dates`).then(setDates).catch(() => {});
+    }
+
+    useEffect(load, [storeId]);
+
+    async function handleSubmit(e: FormEvent) {
+        e.preventDefault();
+        setLoading(true);
+        setError(null);
+        try {
+            await api.post(`/stores/${storeId}/special-dates`, {
+                date,
+                is_closed: closed,
+                start_time: closed ? undefined : startTime,
+                end_time: closed ? undefined : endTime,
+                reason: reason || undefined,
+            });
+            setDate("");
+            setReason("");
+            load();
+        } catch (err) {
+            setError(err instanceof ApiError ? err.message : "No se pudo guardar la fecha especial");
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    async function remove(id: string) {
+        await api.delete(`/stores/${storeId}/special-dates/${id}`);
+        load();
+    }
+
+    return (
+        <div>
+            <h3>Días festivos / horario especial</h3>
+            {dates?.map((d) => (
+                <div className="appointment-row" key={d.id}>
+                    <span>
+                        {d.date} ·{" "}
+                        {d.is_closed ? "Cerrado todo el día" : `${d.start_time?.slice(0, 5)}–${d.end_time?.slice(0, 5)}`}
+                        {d.reason ? ` · ${d.reason}` : ""}
+                    </span>
+                    <button className="btn btn-ghost btn-sm" onClick={() => remove(d.id)} aria-label="Quitar">
+                        <Trash size={13} />
+                    </button>
+                </div>
+            ))}
+            <form onSubmit={handleSubmit} className="inline-form">
+                <input type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
+                <label>
+                    <input type="checkbox" checked={closed} onChange={(e) => setClosed(e.target.checked)} /> Cerrado
+                    todo el día
+                </label>
+                {!closed && (
+                    <>
+                        <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
+                        <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
+                    </>
+                )}
+                <input placeholder="Motivo (opcional)" value={reason} onChange={(e) => setReason(e.target.value)} />
+                <button className="btn btn-primary btn-sm" type="submit" disabled={loading || !date}>
+                    {loading ? "Guardando..." : "Agregar"}
+                </button>
+            </form>
+            {error && <p className="error">{error}</p>}
+        </div>
+    );
+}
+
+function BlockedSlotsEditor({ storeId, storeTimezone }: { storeId: string; storeTimezone: string }) {
+    const [blocks, setBlocks] = useState<BlockedSlot[] | null>(null);
+    const [date, setDate] = useState("");
+    const [startTime, setStartTime] = useState("09:00");
+    const [endTime, setEndTime] = useState("10:00");
+    const [reason, setReason] = useState("");
+    const [error, setError] = useState<string | null>(null);
+    const [loading, setLoading] = useState(false);
+
+    function load() {
+        api.get<BlockedSlot[]>(`/stores/${storeId}/blocked-slots`).then(setBlocks).catch(() => {});
+    }
+
+    useEffect(load, [storeId]);
+
+    async function handleSubmit(e: FormEvent) {
+        e.preventDefault();
+        setLoading(true);
+        setError(null);
+        try {
+            await api.post(`/stores/${storeId}/blocked-slots`, {
+                date,
+                start_time: startTime,
+                end_time: endTime,
+                reason: reason || undefined,
+            });
+            setDate("");
+            setReason("");
+            load();
+        } catch (err) {
+            setError(err instanceof ApiError ? err.message : "No se pudo guardar el bloqueo");
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    async function remove(id: string) {
+        await api.delete(`/stores/${storeId}/blocked-slots/${id}`);
+        load();
+    }
+
+    return (
+        <div>
+            <h3>Bloqueos puntuales</h3>
+            {blocks?.map((b) => (
+                <div className="appointment-row" key={b.id}>
+                    <span>
+                        {formatDateTime(b.starts_at, storeTimezone)}–{formatTime(b.ends_at, storeTimezone)}
+                        {b.reason ? ` · ${b.reason}` : ""}
+                    </span>
+                    <button className="btn btn-ghost btn-sm" onClick={() => remove(b.id)} aria-label="Quitar">
+                        <Trash size={13} />
+                    </button>
+                </div>
+            ))}
+            <form onSubmit={handleSubmit} className="inline-form">
+                <input type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
+                <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
+                <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
+                <input placeholder="Motivo (opcional)" value={reason} onChange={(e) => setReason(e.target.value)} />
+                <button className="btn btn-primary btn-sm" type="submit" disabled={loading || !date}>
+                    {loading ? "Guardando..." : "Bloquear"}
+                </button>
+            </form>
+            {error && <p className="error">{error}</p>}
+        </div>
+    );
+}
+
 function ServicesManager({ storeId, allowDeposits }: { storeId: string; allowDeposits: boolean }) {
     const [services, setServices] = useState<Service[] | null>(null);
     const [categories, setCategories] = useState<Category[]>([]);
@@ -875,6 +1042,7 @@ function ServiceRow({
 function AppointmentsManager({ storeId, storeTimezone }: { storeId: string; storeTimezone: string }) {
     const [appointments, setAppointments] = useState<Appointment[] | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [chatAppointment, setChatAppointment] = useState<Appointment | null>(null);
 
     function load() {
         api
@@ -910,15 +1078,27 @@ function AppointmentsManager({ storeId, storeTimezone }: { storeId: string; stor
                             {a.party_size ? ` · ${a.party_size} personas` : ""} ·{" "}
                             {a.customer_name || a.customer_email}
                         </span>
-                        <select value={a.status} onChange={(e) => changeStatus(a.id, e.target.value as Appointment["status"])}>
-                            {STATUSES.map((s) => (
-                                <option key={s} value={s}>
-                                    {s}
-                                </option>
-                            ))}
-                        </select>
+                        <div className="inline-form">
+                            <button className="btn btn-ghost btn-sm" onClick={() => setChatAppointment(a)}>
+                                <ChatCircle size={14} /> Chat
+                            </button>
+                            <select value={a.status} onChange={(e) => changeStatus(a.id, e.target.value as Appointment["status"])}>
+                                {STATUSES.map((s) => (
+                                    <option key={s} value={s}>
+                                        {s}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
                     </div>
                 ))
+            )}
+            {chatAppointment && (
+                <ChatPanel
+                    endpoint={`/appointments/${chatAppointment.id}/messages`}
+                    title={chatAppointment.service_name ?? "Chat"}
+                    onClose={() => setChatAppointment(null)}
+                />
             )}
         </section>
     );

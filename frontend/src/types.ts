@@ -162,6 +162,22 @@ export interface Slot {
     ends_at: string;
 }
 
+export interface SpecialDate {
+    id: string;
+    date: string; // "YYYY-MM-DD"
+    is_closed: boolean;
+    start_time: string | null; // "HH:MM:SS", solo si is_closed=false
+    end_time: string | null;
+    reason: string | null;
+}
+
+export interface BlockedSlot {
+    id: string;
+    starts_at: string;
+    ends_at: string;
+    reason: string | null;
+}
+
 export interface Message {
     id: string;
     order_id: string | null;
