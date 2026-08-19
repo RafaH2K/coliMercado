@@ -10,6 +10,21 @@ const STATUSES = ["pendiente", "confirmada", "cancelada", "completada", "no_asis
 // Cuánto se aparta el horario mientras el cliente paga el anticipo en Stripe.
 const HOLD_MINUTES = 10;
 
+// Igual que ALLOWED_TRANSITIONS en orders.controller.js: el ciclo de vida
+// solo avanza. Sin esto, una cita "completada" o "no_asistio" se podía
+// mover a "cancelada" y disparar el reembolso del anticipo de abajo aunque
+// el servicio ya se hubiera dado (o el cliente ya hubiera faltado) — y una
+// cita "cancelada" se podía reactivar a "confirmada" sin repetir el chequeo
+// de disponibilidad de create(), permitiendo dos citas encimadas en el
+// mismo horario. completada/no_asistio/cancelada quedan terminales.
+const ALLOWED_APPOINTMENT_TRANSITIONS = {
+    pendiente: ["confirmada", "completada", "no_asistio", "cancelada"],
+    confirmada: ["completada", "no_asistio", "cancelada"],
+    completada: [],
+    no_asistio: [],
+    cancelada: [],
+};
+
 // Fire-and-forget: un correo que falla no debe tumbar la reserva ni el
 // cambio de estado, solo se loggea.
 async function notifyNewAppointment({ ownerEmail, storeName, serviceName, startsAt }) {
@@ -372,9 +387,17 @@ async function updateStatus(req, res) {
 
         const isOwner = appt.owner_id === req.user.id;
         const isCustomer = appt.customer_id === req.user.id;
-        // El dueño del negocio puede poner cualquier estado; el cliente solo puede cancelar la suya.
+        // El dueño del negocio puede poner cualquier estado permitido; el cliente solo puede cancelar la suya.
         if (!isOwner && !(isCustomer && status === "cancelada")) {
             return res.status(403).json({ error: "No autorizado para hacer este cambio" });
+        }
+        // Repetir el estado actual es un no-op válido (evita un 409 confuso
+        // ante un doble clic); cualquier otro cambio sigue el ciclo de vida.
+        // appt.status puede ser 'pendiente_pago' (hold sin confirmar, no está
+        // en el mapa porque no es un status público) -- (|| []) lo trata como
+        // sin transiciones permitidas en vez de tronar con un TypeError.
+        if (status !== appt.status && !(ALLOWED_APPOINTMENT_TRANSITIONS[appt.status] || []).includes(status)) {
+            return res.status(409).json({ error: `No se puede cambiar una cita de "${appt.status}" a "${status}"` });
         }
 
         const { rows: updated } = await pool.query(

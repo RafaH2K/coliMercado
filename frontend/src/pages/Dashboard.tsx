@@ -21,6 +21,17 @@ import type {
 
 const DAYS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 const STATUSES: Appointment["status"][] = ["pendiente", "confirmada", "completada", "no_asistio", "cancelada"];
+
+// El ciclo de vida de una cita solo avanza (ver ALLOWED_APPOINTMENT_TRANSITIONS
+// en appointments.controller.js) -- el select del dueño solo debe ofrecer lo
+// que el backend de verdad va a aceptar.
+const APPOINTMENT_NEXT_STATUSES: Record<Appointment["status"], Appointment["status"][]> = {
+    pendiente: ["confirmada", "completada", "no_asistio", "cancelada"],
+    confirmada: ["completada", "no_asistio", "cancelada"],
+    completada: [],
+    no_asistio: [],
+    cancelada: [],
+};
 const TIMEZONES: string[] =
     typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : ["America/Mexico_City"];
 const BROWSER_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -1165,8 +1176,13 @@ function AppointmentsManager({ storeId, storeTimezone }: { storeId: string; stor
                             <button className="btn btn-ghost btn-sm" onClick={() => setChatAppointment(a)}>
                                 <ChatCircle size={14} /> Chat
                             </button>
-                            <select value={a.status} onChange={(e) => changeStatus(a.id, e.target.value as Appointment["status"])}>
-                                {STATUSES.map((s) => (
+                            <select
+                                value={a.status}
+                                onChange={(e) => changeStatus(a.id, e.target.value as Appointment["status"])}
+                                disabled={APPOINTMENT_NEXT_STATUSES[a.status].length === 0}
+                            >
+                                <option value={a.status}>{a.status}</option>
+                                {APPOINTMENT_NEXT_STATUSES[a.status].map((s) => (
                                     <option key={s} value={s}>
                                         {s}
                                     </option>
@@ -1391,6 +1407,17 @@ function ProductRow({
 
 const ORDER_STATUSES: Order["status"][] = ["pendiente", "pagado", "entregado", "cancelado"];
 
+// El ciclo de vida de un pedido solo avanza (ver ALLOWED_TRANSITIONS en
+// orders.controller.js) -- el select solo debe ofrecer las opciones que el
+// backend de verdad va a aceptar, para no dejar al dueño elegir un estado
+// que después va a rechazar con un error confuso.
+const ORDER_NEXT_STATUSES: Record<Order["status"], Order["status"][]> = {
+    pendiente: ["pagado", "cancelado"],
+    pagado: ["entregado", "cancelado"],
+    entregado: [],
+    cancelado: [],
+};
+
 function OrdersManager({ storeId }: { storeId: string }) {
     const [orders, setOrders] = useState<Order[] | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -1428,8 +1455,13 @@ function OrdersManager({ storeId }: { storeId: string }) {
                             Folio {orderFolio(o.id)} · {o.items.map((it) => `${it.quantity}× ${it.name}`).join(", ")} · $
                             {o.total_amount} · {o.customer_name || o.customer_email}
                         </span>
-                        <select value={o.status} onChange={(e) => changeStatus(o.id, e.target.value as Order["status"])}>
-                            {ORDER_STATUSES.map((s) => (
+                        <select
+                            value={o.status}
+                            onChange={(e) => changeStatus(o.id, e.target.value as Order["status"])}
+                            disabled={ORDER_NEXT_STATUSES[o.status].length === 0}
+                        >
+                            <option value={o.status}>{o.status}</option>
+                            {ORDER_NEXT_STATUSES[o.status].map((s) => (
                                 <option key={s} value={s}>
                                     {s}
                                 </option>

@@ -372,6 +372,56 @@ test("updateStatus: cancelar una cita con anticipo pagado reembolsa automáticam
     assert.deepEqual(refundedWith, { payment_intent: "pi_test_pagado" });
 });
 
+test("updateStatus: cancelar una cita completada no reembolsa (el ciclo de vida no retrocede)", async (t) => {
+    const ownerId = await createUser();
+    const storeId = await createStore(ownerId, { approved: true });
+    const serviceId = await createService(storeId);
+    const customerId = await createUser();
+    t.after(() => cleanup({ userId: [ownerId, customerId], storeId }));
+
+    const created = mockRes();
+    await appointments.create({ user: { id: customerId }, body: { product_id: serviceId, starts_at: inHours(24) } }, created);
+    const apptId = created.body.id;
+    await pool.query(
+        `UPDATE appointments SET status = 'completada', stripe_payment_intent_id = 'pi_test_ya_completada' WHERE id = $1`,
+        [apptId]
+    );
+
+    let refundCalled = false;
+    const originalRefund = stripe.refunds.create;
+    stripe.refunds.create = async () => {
+        refundCalled = true;
+        return { id: "re_test_fake" };
+    };
+    t.after(() => {
+        stripe.refunds.create = originalRefund;
+    });
+
+    const res = mockRes();
+    await appointments.updateStatus({ user: { id: ownerId }, params: { id: apptId }, body: { status: "cancelada" } }, res);
+
+    assert.equal(res.statusCode, 409);
+    assert.equal(refundCalled, false, "no debió reembolsar una cita ya completada");
+});
+
+test("updateStatus: una cita cancelada no puede reactivarse (evita doble reserva del mismo horario)", async (t) => {
+    const ownerId = await createUser();
+    const storeId = await createStore(ownerId, { approved: true });
+    const serviceId = await createService(storeId);
+    const customerId = await createUser();
+    t.after(() => cleanup({ userId: [ownerId, customerId], storeId }));
+
+    const created = mockRes();
+    await appointments.create({ user: { id: customerId }, body: { product_id: serviceId, starts_at: inHours(24) } }, created);
+    const apptId = created.body.id;
+    await pool.query(`UPDATE appointments SET status = 'cancelada' WHERE id = $1`, [apptId]);
+
+    const res = mockRes();
+    await appointments.updateStatus({ user: { id: ownerId }, params: { id: apptId }, body: { status: "confirmada" } }, res);
+
+    assert.equal(res.statusCode, 409);
+});
+
 test("listMine/listForStore: nunca muestran holds 'pendiente_pago'", async (t) => {
     const ownerId = await createUser();
     const storeId = await createStore(ownerId, { approved: true });

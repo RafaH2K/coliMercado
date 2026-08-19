@@ -355,6 +355,19 @@ async function listForStore(req, res) {
 
 const STATUSES = ["pendiente", "pagado", "entregado", "cancelado"];
 
+// El ciclo de vida de un pedido solo avanza, nunca retrocede: "pagado" (por
+// Stripe o porque el dueño cobró en efectivo) no debe poder regresarse a
+// "pendiente" -- entre otras cosas porque StatsPanel.tsx cuenta como ingreso
+// todo lo que esté en pagado/entregado, y retroceder el estado le haría
+// desaparecer ingresos ya reales de las estadísticas del negocio.
+// "entregado" y "cancelado" son terminales.
+const ALLOWED_TRANSITIONS = {
+    pendiente: ["pagado", "cancelado"],
+    pagado: ["entregado", "cancelado"],
+    entregado: [],
+    cancelado: [],
+};
+
 async function updateStatus(req, res) {
     const { status } = req.body;
     if (!STATUSES.includes(status)) {
@@ -362,7 +375,7 @@ async function updateStatus(req, res) {
     }
     try {
         const { rows } = await pool.query(
-            `SELECT o.id, s.owner_id FROM orders o JOIN stores s ON s.id = o.store_id WHERE o.id = $1`,
+            `SELECT o.id, o.status, s.owner_id FROM orders o JOIN stores s ON s.id = o.store_id WHERE o.id = $1`,
             [req.params.id]
         );
         const order = rows[0];
@@ -370,10 +383,41 @@ async function updateStatus(req, res) {
         if (order.owner_id !== req.user.id) {
             return res.status(403).json({ error: "No eres dueño de este pedido" });
         }
+        // Repetir el estado actual es un no-op válido (evita un 409 confuso
+        // ante un doble clic o un reintento de red); cualquier otro cambio
+        // debe seguir el ciclo de vida de arriba.
+        if (status !== order.status && !ALLOWED_TRANSITIONS[order.status].includes(status)) {
+            return res.status(409).json({
+                error: `No se puede cambiar un pedido de "${order.status}" a "${status}"`,
+            });
+        }
         const { rows: updated } = await pool.query(
             `UPDATE orders SET status = $1 WHERE id = $2 RETURNING *`,
             [status, req.params.id]
         );
+
+        // Un pedido pagado con tarjeta que se cancela debe devolver el cobro
+        // -- mismo criterio que ya aplica appointments.js al cancelar una
+        // cita con anticipo pagado. Los pedidos en efectivo nunca pasaron
+        // por Stripe (provider='efectivo'), no hay nada que reembolsar ahí.
+        if (status === "cancelado" && order.status === "pagado") {
+            const { rows: paymentRows } = await pool.query(
+                `SELECT stripe_session_id FROM payments WHERE order_id = $1 AND provider = 'stripe'`,
+                [req.params.id]
+            );
+            const sessionId = paymentRows[0]?.stripe_session_id;
+            if (sessionId) {
+                try {
+                    const session = await stripe.checkout.sessions.retrieve(sessionId);
+                    if (session.payment_intent) {
+                        await stripe.refunds.create({ payment_intent: session.payment_intent });
+                    }
+                } catch (err) {
+                    console.error("orders.updateStatus: fallo el reembolso del pedido:", err.message);
+                }
+            }
+        }
+
         res.json(updated[0]);
     } catch (err) {
         console.error("orders.updateStatus error:", err.message);

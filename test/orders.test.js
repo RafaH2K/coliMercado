@@ -175,4 +175,149 @@ test("confirmStripeSession: una sesión ya procesada es idempotente (no duplica 
     assert.equal(allOrders.length, 1, "no debió crearse un segundo pedido");
 });
 
+test("updateStatus: pendiente -> pagado (cobro en efectivo) se permite", async (t) => {
+    const ownerId = await createUser();
+    const customerId = await createUser();
+    const storeId = await createStore(ownerId);
+    t.after(() => cleanup({ userId: [ownerId, customerId], storeId }));
+
+    const { rows } = await pool.query(
+        `INSERT INTO orders (user_id, store_id, total_amount, status) VALUES ($1, $2, 100, 'pendiente') RETURNING id`,
+        [customerId, storeId]
+    );
+    const orderId = rows[0].id;
+
+    const res = mockRes();
+    await orders.updateStatus({ user: { id: ownerId }, params: { id: orderId }, body: { status: "pagado" } }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.status, "pagado");
+});
+
+test("updateStatus: pagado -> pendiente se rechaza (el ciclo de vida no retrocede)", async (t) => {
+    const ownerId = await createUser();
+    const customerId = await createUser();
+    const storeId = await createStore(ownerId);
+    t.after(() => cleanup({ userId: [ownerId, customerId], storeId }));
+
+    const { rows } = await pool.query(
+        `INSERT INTO orders (user_id, store_id, total_amount, status) VALUES ($1, $2, 100, 'pagado') RETURNING id`,
+        [customerId, storeId]
+    );
+    const orderId = rows[0].id;
+
+    const res = mockRes();
+    await orders.updateStatus({ user: { id: ownerId }, params: { id: orderId }, body: { status: "pendiente" } }, res);
+
+    assert.equal(res.statusCode, 409);
+
+    const { rows: unchanged } = await pool.query(`SELECT status FROM orders WHERE id = $1`, [orderId]);
+    assert.equal(unchanged[0].status, "pagado");
+});
+
+test("updateStatus: entregado y cancelado son terminales (no aceptan más cambios)", async (t) => {
+    const ownerId = await createUser();
+    const customerId = await createUser();
+    const storeId = await createStore(ownerId);
+    t.after(() => cleanup({ userId: [ownerId, customerId], storeId }));
+
+    const { rows } = await pool.query(
+        `INSERT INTO orders (user_id, store_id, total_amount, status) VALUES ($1, $2, 100, 'entregado') RETURNING id`,
+        [customerId, storeId]
+    );
+    const orderId = rows[0].id;
+
+    const res = mockRes();
+    await orders.updateStatus({ user: { id: ownerId }, params: { id: orderId }, body: { status: "cancelado" } }, res);
+
+    assert.equal(res.statusCode, 409);
+});
+
+test("updateStatus: cancelar un pedido pagado con tarjeta reembolsa automáticamente", async (t) => {
+    const ownerId = await createUser();
+    const customerId = await createUser();
+    const storeId = await createStore(ownerId);
+    t.after(() => cleanup({ userId: [ownerId, customerId], storeId }));
+
+    const { rows } = await pool.query(
+        `INSERT INTO orders (user_id, store_id, total_amount, status) VALUES ($1, $2, 100, 'pagado') RETURNING id`,
+        [customerId, storeId]
+    );
+    const orderId = rows[0].id;
+    await pool.query(
+        `INSERT INTO payments (order_id, amount, provider, status, stripe_session_id) VALUES ($1, 100, 'stripe', 'pagado', 'cs_test_pedido_pagado')`,
+        [orderId]
+    );
+
+    const originalRetrieve = stripe.checkout.sessions.retrieve;
+    const originalRefundsCreate = stripe.refunds.create;
+    let refundedWith = null;
+    stripe.checkout.sessions.retrieve = async () => ({ payment_intent: "pi_test_pedido" });
+    stripe.refunds.create = async (args) => {
+        refundedWith = args;
+        return { id: "re_test_fake" };
+    };
+    t.after(() => {
+        stripe.checkout.sessions.retrieve = originalRetrieve;
+        stripe.refunds.create = originalRefundsCreate;
+    });
+
+    const res = mockRes();
+    await orders.updateStatus({ user: { id: ownerId }, params: { id: orderId }, body: { status: "cancelado" } }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(refundedWith, { payment_intent: "pi_test_pedido" });
+});
+
+test("updateStatus: cancelar un pedido pagado en efectivo no intenta reembolsar por Stripe", async (t) => {
+    const ownerId = await createUser();
+    const customerId = await createUser();
+    const storeId = await createStore(ownerId);
+    t.after(() => cleanup({ userId: [ownerId, customerId], storeId }));
+
+    const { rows } = await pool.query(
+        `INSERT INTO orders (user_id, store_id, total_amount, status) VALUES ($1, $2, 100, 'pagado') RETURNING id`,
+        [customerId, storeId]
+    );
+    const orderId = rows[0].id;
+    await pool.query(
+        `INSERT INTO payments (order_id, amount, provider, status) VALUES ($1, 100, 'efectivo', 'pagado')`,
+        [orderId]
+    );
+
+    let refundCalled = false;
+    const originalRefundsCreate = stripe.refunds.create;
+    stripe.refunds.create = async () => {
+        refundCalled = true;
+        return { id: "re_test_fake" };
+    };
+    t.after(() => {
+        stripe.refunds.create = originalRefundsCreate;
+    });
+
+    const res = mockRes();
+    await orders.updateStatus({ user: { id: ownerId }, params: { id: orderId }, body: { status: "cancelado" } }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(refundCalled, false, "un pedido en efectivo nunca pasó por Stripe, no hay nada que reembolsar ahí");
+});
+
+test("updateStatus: repetir el estado actual es un no-op válido", async (t) => {
+    const ownerId = await createUser();
+    const customerId = await createUser();
+    const storeId = await createStore(ownerId);
+    t.after(() => cleanup({ userId: [ownerId, customerId], storeId }));
+
+    const { rows } = await pool.query(
+        `INSERT INTO orders (user_id, store_id, total_amount, status) VALUES ($1, $2, 100, 'pagado') RETURNING id`,
+        [customerId, storeId]
+    );
+    const orderId = rows[0].id;
+
+    const res = mockRes();
+    await orders.updateStatus({ user: { id: ownerId }, params: { id: orderId }, body: { status: "pagado" } }, res);
+
+    assert.equal(res.statusCode, 200);
+});
+
 after(() => pool.end());
