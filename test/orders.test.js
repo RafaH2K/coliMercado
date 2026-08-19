@@ -4,6 +4,18 @@ const assert = require("node:assert/strict");
 const { pool, createUser, createStore, createProduct, cleanup, mockRes } = require("./fixtures");
 const orders = require("../src/controllers/orders.controller");
 const stripe = require("../src/config/stripe");
+const mercadopago = require("../src/lib/mercadopago");
+const { encrypt } = require("../src/lib/crypto");
+
+// Simula que el negocio ya conectó su cuenta de Mercado Pago (OAuth) --
+// el token real no importa en tests, nunca se manda de verdad porque
+// mercadopago.createPreference/getPayment/refundPayment se mockean.
+async function connectMercadoPago(storeId) {
+    await pool.query(`UPDATE stores SET mercadopago_access_token = $1, mercadopago_user_id = 123 WHERE id = $2`, [
+        encrypt("fake-access-token"),
+        storeId,
+    ]);
+}
 
 test("checkout: compra exitosa descuenta stock, crea el pedido y vacía el carrito", async (t) => {
     const userId = await createUser();
@@ -61,91 +73,110 @@ test("checkout: carrito vacío responde 400", async (t) => {
     assert.equal(res.statusCode, 400);
 });
 
-test("createCheckoutSession: cobra el precio con el recargo del 12% por tarjeta", async (t) => {
+test("createMercadoPagoCheckoutSession: negocio sin conectar responde 400 sin llamar a Mercado Pago", async (t) => {
+    const userId = await createUser();
+    const storeId = await createStore(userId);
+    const productId = await createProduct(storeId, { price: 100, stock: 5 });
+    await pool.query(`INSERT INTO cart_items (user_id, product_id, quantity) VALUES ($1, $2, 1)`, [userId, productId]);
+    t.after(() => cleanup({ userId, storeId, productId }));
+
+    let called = false;
+    const original = mercadopago.createPreference;
+    mercadopago.createPreference = async () => {
+        called = true;
+        return { init_point: "https://mp.test/fake" };
+    };
+    t.after(() => {
+        mercadopago.createPreference = original;
+    });
+
+    const res = mockRes();
+    await orders.createMercadoPagoCheckoutSession({ user: { id: userId }, body: { store_id: storeId } }, res);
+
+    assert.equal(res.statusCode, 400);
+    assert.equal(called, false, "no debió ni intentar llamar a Mercado Pago");
+});
+
+test("createMercadoPagoCheckoutSession: cobra el precio con el recargo del 12% y el negocio recibe su precio de lista", async (t) => {
     const userId = await createUser();
     const storeId = await createStore(userId);
     const productId = await createProduct(storeId, { price: 100, stock: 5 });
     await pool.query(`INSERT INTO cart_items (user_id, product_id, quantity) VALUES ($1, $2, 2)`, [userId, productId]);
+    await connectMercadoPago(storeId);
     t.after(() => cleanup({ userId, storeId, productId }));
 
-    const originalCreate = stripe.checkout.sessions.create;
-    let sessionArgs = null;
-    stripe.checkout.sessions.create = async (args) => {
-        sessionArgs = args;
-        return { url: "https://checkout.stripe.test/fake" };
+    const original = mercadopago.createPreference;
+    let preferenceArgs = null;
+    mercadopago.createPreference = async (args) => {
+        preferenceArgs = args;
+        return { init_point: "https://mp.test/fake" };
     };
     t.after(() => {
-        stripe.checkout.sessions.create = originalCreate;
+        mercadopago.createPreference = original;
     });
 
     const res = mockRes();
-    await orders.createCheckoutSession({ user: { id: userId } }, res);
+    await orders.createMercadoPagoCheckoutSession({ user: { id: userId }, body: { store_id: storeId } }, res);
 
-    assert.equal(res.body.url, "https://checkout.stripe.test/fake");
-    assert.equal(sessionArgs.line_items[0].price_data.unit_amount, 11200, "$100 + 12% = $112.00 -> 11200 centavos");
-    assert.equal(sessionArgs.line_items[0].quantity, 2);
+    assert.equal(res.body.url, "https://mp.test/fake");
+    assert.equal(preferenceArgs.items[0].unit_price, 112, "$100 + 12% = $112");
+    assert.equal(preferenceArgs.items[0].quantity, 2);
+    // listedTotal = 200 (2 x $100), chargedTotal = 224 (2 x $112) -> el
+    // negocio recibe los 200, la plataforma se queda con los 24 de más.
+    assert.equal(preferenceArgs.marketplaceFee, 24);
+    assert.equal(preferenceArgs.externalReference, `order:${userId}:${storeId}`);
 });
 
-test("createCheckoutSession: carrito por debajo del mínimo de Stripe ($10 MXN) responde 400 sin llamar a Stripe", async (t) => {
+test("confirmMercadoPagoPayment: no permite confirmar el pago de otro usuario", async (t) => {
     const userId = await createUser();
     const storeId = await createStore(userId);
-    const productId = await createProduct(storeId, { price: 5, stock: 5 });
-    await pool.query(`INSERT INTO cart_items (user_id, product_id, quantity) VALUES ($1, $2, 1)`, [userId, productId]);
-    t.after(() => cleanup({ userId, storeId, productId }));
-
-    const originalCreate = stripe.checkout.sessions.create;
-    let called = false;
-    stripe.checkout.sessions.create = async () => {
-        called = true;
-        return { url: "https://checkout.stripe.test/fake" };
-    };
-    t.after(() => {
-        stripe.checkout.sessions.create = originalCreate;
-    });
+    t.after(() => cleanup({ userId, storeId }));
 
     const res = mockRes();
-    await orders.createCheckoutSession({ user: { id: userId } }, res);
+    await orders.confirmMercadoPagoPayment(
+        { user: { id: userId }, body: { payment_id: "1", external_reference: `order:otro-usuario:${storeId}` } },
+        res
+    );
 
-    assert.equal(res.statusCode, 400);
-    assert.equal(called, false, "no debió ni intentar llamar a Stripe");
+    assert.equal(res.statusCode, 403);
 });
 
-test("confirmStripeSession: pago ya pagado con inventario agotado se reembolsa automáticamente", async (t) => {
+test("confirmMercadoPagoPayment: pago aprobado con inventario agotado se reembolsa automáticamente", async (t) => {
     const userId = await createUser();
     const storeId = await createStore(userId);
     const productId = await createProduct(storeId, { price: 200, stock: 0 });
     await pool.query(`INSERT INTO cart_items (user_id, product_id, quantity) VALUES ($1, $2, 1)`, [userId, productId]);
+    await connectMercadoPago(storeId);
 
-    const originalRetrieve = stripe.checkout.sessions.retrieve;
-    const originalRefundsCreate = stripe.refunds.create;
+    const originalGetPayment = mercadopago.getPayment;
+    const originalRefund = mercadopago.refundPayment;
     let refundedWith = null;
-    stripe.checkout.sessions.retrieve = async () => ({
-        payment_status: "paid",
-        payment_intent: "pi_test_fake",
-        metadata: { user_id: userId },
-    });
-    stripe.refunds.create = async (args) => {
+    mercadopago.getPayment = async () => ({ id: "mp_payment_fake", status: "approved" });
+    mercadopago.refundPayment = async (args) => {
         refundedWith = args;
         return { id: "re_test_fake" };
     };
     t.after(async () => {
-        stripe.checkout.sessions.retrieve = originalRetrieve;
-        stripe.refunds.create = originalRefundsCreate;
+        mercadopago.getPayment = originalGetPayment;
+        mercadopago.refundPayment = originalRefund;
         await cleanup({ userId, storeId, productId });
     });
 
     const res = mockRes();
-    await orders.confirmStripeSession({ user: { id: userId }, body: { session_id: "cs_test_fake" } }, res);
+    await orders.confirmMercadoPagoPayment(
+        { user: { id: userId }, body: { payment_id: "mp_payment_fake", external_reference: `order:${userId}:${storeId}` } },
+        res
+    );
 
     assert.equal(res.statusCode, 409);
     assert.match(res.body.error, /reembolsado/);
-    assert.deepEqual(refundedWith, { payment_intent: "pi_test_fake" });
+    assert.equal(refundedWith.paymentId, "mp_payment_fake");
 
     const { rows: orderRows } = await pool.query(`SELECT * FROM orders WHERE user_id = $1`, [userId]);
     assert.equal(orderRows.length, 0, "no debió crearse un pedido pese al cobro");
 });
 
-test("confirmStripeSession: una sesión ya procesada es idempotente (no duplica el pedido)", async (t) => {
+test("confirmMercadoPagoPayment: un pago ya procesado es idempotente (no duplica el pedido)", async (t) => {
     const userId = await createUser();
     const storeId = await createStore(userId);
     const productId = await createProduct(storeId, { price: 75, stock: 5 });
@@ -157,13 +188,19 @@ test("confirmStripeSession: una sesión ya procesada es idempotente (no duplica 
     );
     const orderId = orderRows[0].id;
     await pool.query(
-        `INSERT INTO payments (order_id, amount, provider, status, stripe_session_id) VALUES ($1, 75, 'stripe', 'pagado', 'cs_test_ya_procesada')`,
+        `INSERT INTO payments (order_id, amount, provider, status, mercadopago_payment_id) VALUES ($1, 75, 'mercadopago', 'pagado', 'mp_ya_procesado')`,
         [orderId]
     );
 
+    const original = mercadopago.getPayment;
+    mercadopago.getPayment = async () => ({ id: "mp_ya_procesado", status: "approved" });
+    t.after(() => {
+        mercadopago.getPayment = original;
+    });
+
     const res = mockRes();
-    await orders.confirmStripeSession(
-        { user: { id: userId }, body: { session_id: "cs_test_ya_procesada" } },
+    await orders.confirmMercadoPagoPayment(
+        { user: { id: userId }, body: { payment_id: "mp_ya_procesado", external_reference: `order:${userId}:${storeId}` } },
         res
     );
 
@@ -173,6 +210,39 @@ test("confirmStripeSession: una sesión ya procesada es idempotente (no duplica 
 
     const { rows: allOrders } = await pool.query(`SELECT * FROM orders WHERE user_id = $1`, [userId]);
     assert.equal(allOrders.length, 1, "no debió crearse un segundo pedido");
+});
+
+test("confirmMercadoPagoPayment: un carrito con 2 negocios distintos solo confirma el negocio pagado", async (t) => {
+    const userId = await createUser();
+    const storeA = await createStore(userId);
+    const storeB = await createStore(userId);
+    const productA = await createProduct(storeA, { price: 50, stock: 5 });
+    const productB = await createProduct(storeB, { price: 30, stock: 5 });
+    await pool.query(`INSERT INTO cart_items (user_id, product_id, quantity) VALUES ($1, $2, 1)`, [userId, productA]);
+    await pool.query(`INSERT INTO cart_items (user_id, product_id, quantity) VALUES ($1, $2, 1)`, [userId, productB]);
+    await connectMercadoPago(storeA);
+    t.after(() => cleanup({ userId, storeId: [storeA, storeB], productId: [productA, productB] }));
+
+    const original = mercadopago.getPayment;
+    mercadopago.getPayment = async () => ({ id: "mp_solo_tienda_a", status: "approved" });
+    t.after(() => {
+        mercadopago.getPayment = original;
+    });
+
+    const res = mockRes();
+    await orders.confirmMercadoPagoPayment(
+        { user: { id: userId }, body: { payment_id: "mp_solo_tienda_a", external_reference: `order:${userId}:${storeA}` } },
+        res
+    );
+
+    assert.equal(res.statusCode, 201);
+    assert.equal(res.body.length, 1);
+    assert.equal(res.body[0].store_id, storeA);
+
+    // El producto de la tienda B debe seguir en el carrito -- no se tocó.
+    const { rows: cartRows } = await pool.query(`SELECT product_id FROM cart_items WHERE user_id = $1`, [userId]);
+    assert.equal(cartRows.length, 1);
+    assert.equal(cartRows[0].product_id, productB);
 });
 
 test("updateStatus: pendiente -> pagado (cobro en efectivo) se permite", async (t) => {
@@ -267,6 +337,40 @@ test("updateStatus: cancelar un pedido pagado con tarjeta reembolsa automáticam
 
     assert.equal(res.statusCode, 200);
     assert.deepEqual(refundedWith, { payment_intent: "pi_test_pedido" });
+});
+
+test("updateStatus: cancelar un pedido pagado por Mercado Pago reembolsa con el token del negocio", async (t) => {
+    const ownerId = await createUser();
+    const customerId = await createUser();
+    const storeId = await createStore(ownerId);
+    await connectMercadoPago(storeId);
+    t.after(() => cleanup({ userId: [ownerId, customerId], storeId }));
+
+    const { rows } = await pool.query(
+        `INSERT INTO orders (user_id, store_id, total_amount, status) VALUES ($1, $2, 100, 'pagado') RETURNING id`,
+        [customerId, storeId]
+    );
+    const orderId = rows[0].id;
+    await pool.query(
+        `INSERT INTO payments (order_id, amount, provider, status, mercadopago_payment_id) VALUES ($1, 100, 'mercadopago', 'pagado', 'mp_test_pedido_pagado')`,
+        [orderId]
+    );
+
+    const original = mercadopago.refundPayment;
+    let refundedWith = null;
+    mercadopago.refundPayment = async (args) => {
+        refundedWith = args;
+        return { id: "re_test_fake" };
+    };
+    t.after(() => {
+        mercadopago.refundPayment = original;
+    });
+
+    const res = mockRes();
+    await orders.updateStatus({ user: { id: ownerId }, params: { id: orderId }, body: { status: "cancelado" } }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(refundedWith.paymentId, "mp_test_pedido_pagado");
 });
 
 test("updateStatus: cancelar un pedido pagado en efectivo no intenta reembolsar por Stripe", async (t) => {

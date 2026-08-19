@@ -21,13 +21,16 @@ export default function MyAppointments() {
 
     useEffect(load, []);
 
-    // Si volvemos de Stripe con ?deposit_session_id=..., confirma la cita al
-    // instante (el webhook la activa de todos modos si el cliente nunca vuelve).
+    // Si volvemos de Mercado Pago con ?payment_id=...&external_reference=...
+    // (los agrega MP solo, no el frontend), confirma la cita al instante --
+    // el webhook la activa de todos modos si el cliente nunca vuelve.
     useEffect(() => {
-        const sessionId = new URLSearchParams(window.location.search).get("deposit_session_id");
-        if (!sessionId) return;
+        const url = new URLSearchParams(window.location.search);
+        const paymentId = url.get("payment_id");
+        const externalReference = url.get("external_reference");
+        if (!paymentId || !externalReference) return;
         api
-            .post(`/appointments/deposit/confirm`, { session_id: sessionId })
+            .post(`/appointments/mercadopago/deposit/confirm`, { payment_id: paymentId, external_reference: externalReference })
             .then(load)
             .catch((err) => setError(err instanceof ApiError ? err.message : "No se pudo confirmar el anticipo"))
             .finally(() => window.history.replaceState({}, "", "/mis-citas"));

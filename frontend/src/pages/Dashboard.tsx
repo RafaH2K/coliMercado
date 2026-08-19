@@ -545,20 +545,20 @@ function MercadoPagoConnect({ storeId }: { storeId: string }) {
 }
 
 // Aviso fijo: informa la política de recargo por tarjeta (ver
-// STRIPE_CARD_SURCHARGE en orders.controller.js). No afecta lo que el
+// MERCADOPAGO_CARD_SURCHARGE en orders.controller.js). No afecta lo que el
 // negocio ve en sus pedidos/ingresos, solo lo que paga el cliente con tarjeta.
 function CardSurchargeNotice() {
     return (
         <section className="card">
             <h2>Pagos con tarjeta</h2>
             <p className="muted">
-                Cuando un cliente paga con tarjeta (Stripe), se le cobra un 12% adicional sobre el precio: cubre la
-                comisión de Stripe y una comisión de la plataforma. Esto no afecta tus pedidos ni tus ingresos
-                reportados aquí, que siempre reflejan tu precio de lista.
+                Cuando un cliente paga con tarjeta (Mercado Pago), se le cobra un 12% adicional sobre el precio:
+                cubre la comisión de Mercado Pago y una comisión de la plataforma. Esto no afecta tus pedidos ni tus
+                ingresos reportados aquí, que siempre reflejan tu precio de lista.
             </p>
             <p className="muted">
-                Si prefieres que tus clientes no paguen ese recargo, puedes ofrecerles pagar en persona/efectivo
-                directamente contigo — eso ya queda entre tú y tu cliente.
+                Necesitas conectar tu cuenta de Mercado Pago (abajo) para poder cobrar con tarjeta. Sin conectarla,
+                tus clientes solo pueden pagar en persona/efectivo directamente contigo.
             </p>
         </section>
     );

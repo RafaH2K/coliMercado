@@ -1,11 +1,22 @@
 const test = require("node:test");
 const { after } = test;
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const jwt = require("jsonwebtoken");
 const { pool, createUser, createStore, cleanup, mockRes } = require("./fixtures");
 const mercadopago = require("../src/controllers/mercadopago.controller");
+const mercadopagoClient = require("../src/lib/mercadopago");
+const orders = require("../src/controllers/orders.controller");
+const appointments = require("../src/controllers/appointments.controller");
 const { decrypt } = require("../src/lib/crypto");
 const { frontendUrl } = require("../src/lib/frontendUrl");
+
+function signWebhook({ dataId, requestId = "req-test" }) {
+    const ts = String(Date.now());
+    const manifest = `id:${String(dataId).toLowerCase()};request-id:${requestId};ts:${ts};`;
+    const v1 = crypto.createHmac("sha256", process.env.MERCADOPAGO_WEBHOOK_SECRET).update(manifest).digest("hex");
+    return { headers: { "x-signature": `ts=${ts},v1=${v1}`, "x-request-id": requestId } };
+}
 
 function mockFetchOnce(impl) {
     const original = global.fetch;
@@ -196,6 +207,118 @@ test("disconnect: limpia las 5 columnas de mercadopago", async (t) => {
     assert.equal(rows[0].mercadopago_refresh_token, null);
     assert.equal(rows[0].mercadopago_public_key, null);
     assert.equal(rows[0].mercadopago_token_expires_at, null);
+});
+
+test("webhook: firma inválida responde 401 sin consultar el pago", async (t) => {
+    let called = false;
+    const original = mercadopagoClient.getPayment;
+    mercadopagoClient.getPayment = async () => {
+        called = true;
+        return { id: "1", status: "approved" };
+    };
+    t.after(() => {
+        mercadopagoClient.getPayment = original;
+    });
+
+    const res = mockRes();
+    await mercadopago.webhook(
+        {
+            headers: { "x-signature": "ts=1,v1=firma-falsa", "x-request-id": "req-1" },
+            body: { type: "payment", data: { id: "1" } },
+            query: {},
+        },
+        res
+    );
+
+    assert.equal(res.statusCode, 401);
+    assert.equal(called, false, "no debió consultar el pago con una firma inválida");
+});
+
+test("webhook: type distinto de 'payment' responde 200 sin consultar nada", async (t) => {
+    let called = false;
+    const original = mercadopagoClient.getPayment;
+    mercadopagoClient.getPayment = async () => {
+        called = true;
+        return { id: "1", status: "approved" };
+    };
+    t.after(() => {
+        mercadopagoClient.getPayment = original;
+    });
+
+    const { headers } = signWebhook({ dataId: "1" });
+    const res = mockRes();
+    await mercadopago.webhook({ headers, body: { type: "merchant_order", data: { id: "1" } }, query: {} }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(called, false);
+});
+
+test("webhook: external_reference tipo 'order' delega a orders.fulfillMercadoPagoPayment", async (t) => {
+    const originalGetPayment = mercadopagoClient.getPayment;
+    const originalFulfill = orders.fulfillMercadoPagoPayment;
+    let fulfillArgs = null;
+    mercadopagoClient.getPayment = async () => ({
+        id: "mp_payment_1",
+        status: "approved",
+        external_reference: "order:usuario-1:tienda-1",
+    });
+    orders.fulfillMercadoPagoPayment = async (args) => {
+        fulfillArgs = args;
+    };
+    t.after(() => {
+        mercadopagoClient.getPayment = originalGetPayment;
+        orders.fulfillMercadoPagoPayment = originalFulfill;
+    });
+
+    const { headers } = signWebhook({ dataId: "mp_payment_1" });
+    const res = mockRes();
+    await mercadopago.webhook({ headers, body: { type: "payment", data: { id: "mp_payment_1" } }, query: {} }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(fulfillArgs.userId, "usuario-1");
+    assert.equal(fulfillArgs.storeId, "tienda-1");
+    assert.equal(fulfillArgs.payment.id, "mp_payment_1");
+});
+
+test("webhook: external_reference tipo 'appointment' delega a appointments.activateMercadoPagoDeposit", async (t) => {
+    const originalGetPayment = mercadopagoClient.getPayment;
+    const originalActivate = appointments.activateMercadoPagoDeposit;
+    let activateArgs = null;
+    mercadopagoClient.getPayment = async () => ({
+        id: "mp_payment_2",
+        status: "approved",
+        external_reference: "appointment:cita-1",
+    });
+    appointments.activateMercadoPagoDeposit = async (payment) => {
+        activateArgs = payment;
+    };
+    t.after(() => {
+        mercadopagoClient.getPayment = originalGetPayment;
+        appointments.activateMercadoPagoDeposit = originalActivate;
+    });
+
+    const { headers } = signWebhook({ dataId: "mp_payment_2" });
+    const res = mockRes();
+    await mercadopago.webhook({ headers, body: { type: "payment", data: { id: "mp_payment_2" } }, query: {} }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(activateArgs.id, "mp_payment_2");
+});
+
+test("webhook: si el fulfillment falla, igual responde 200 (para que MP no reintente indefinidamente)", async (t) => {
+    const originalGetPayment = mercadopagoClient.getPayment;
+    mercadopagoClient.getPayment = async () => {
+        throw new Error("Mercado Pago no respondió");
+    };
+    t.after(() => {
+        mercadopagoClient.getPayment = originalGetPayment;
+    });
+
+    const { headers } = signWebhook({ dataId: "mp_payment_3" });
+    const res = mockRes();
+    await mercadopago.webhook({ headers, body: { type: "payment", data: { id: "mp_payment_3" } }, query: {} }, res);
+
+    assert.equal(res.statusCode, 200);
 });
 
 after(() => pool.end());

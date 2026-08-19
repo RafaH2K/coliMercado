@@ -5,6 +5,7 @@ async function list(req, res) {
         const { rows } = await pool.query(
             `SELECT ci.product_id, ci.quantity, ci.updated_at,
                     p.name, p.price, p.stock, p.store_id, s.name AS store_name,
+                    (s.mercadopago_user_id IS NOT NULL) AS mercadopago_connected,
                     (SELECT pi.url FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.position LIMIT 1) AS image_url
              FROM cart_items ci
              JOIN products p ON p.id = ci.product_id

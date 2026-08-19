@@ -4,10 +4,22 @@ const assert = require("node:assert/strict");
 const { pool, createUser, createStore, createService, cleanup, mockRes } = require("./fixtures");
 const appointments = require("../src/controllers/appointments.controller");
 const stripe = require("../src/config/stripe");
+const mercadopago = require("../src/lib/mercadopago");
+const { encrypt } = require("../src/lib/crypto");
 
 async function makeStorePro(storeId) {
     const { rows } = await pool.query(`SELECT id FROM plans WHERE code = 'pro'`);
     await pool.query(`UPDATE stores SET plan_id = $1 WHERE id = $2`, [rows[0].id, storeId]);
+}
+
+// Simula que el negocio ya conectó su cuenta de Mercado Pago (OAuth) --
+// necesario para cualquier flujo de anticipo, que ahora exige la conexión
+// antes de iniciar el cobro (ver appointments.controller.js#create).
+async function connectMercadoPago(storeId) {
+    await pool.query(`UPDATE stores SET mercadopago_access_token = $1, mercadopago_user_id = 123 WHERE id = $2`, [
+        encrypt("fake-access-token"),
+        storeId,
+    ]);
 }
 
 function inHours(h) {
@@ -119,7 +131,7 @@ test("updateStatus: un tercero ajeno no puede tocar la cita", async (t) => {
     assert.equal(res.statusCode, 403);
 });
 
-test("create: servicio con anticipo en negocio Pro inicia el cobro en vez de confirmar directo", async (t) => {
+test("create: servicio con anticipo en negocio SIN Mercado Pago conectado bloquea la reserva", async (t) => {
     const ownerId = await createUser();
     const storeId = await createStore(ownerId, { approved: true });
     await makeStorePro(storeId);
@@ -127,14 +139,45 @@ test("create: servicio con anticipo en negocio Pro inicia el cobro en vez de con
     const customerId = await createUser();
     t.after(() => cleanup({ userId: [ownerId, customerId], storeId }));
 
-    const originalCreate = stripe.checkout.sessions.create;
-    let sessionArgs = null;
-    stripe.checkout.sessions.create = async (args) => {
-        sessionArgs = args;
-        return { url: "https://checkout.stripe.test/fake" };
+    let called = false;
+    const original = mercadopago.createPreference;
+    mercadopago.createPreference = async () => {
+        called = true;
+        return { init_point: "https://mp.test/fake" };
     };
     t.after(() => {
-        stripe.checkout.sessions.create = originalCreate;
+        mercadopago.createPreference = original;
+    });
+
+    const res = mockRes();
+    await appointments.create(
+        { user: { id: customerId }, body: { product_id: serviceId, starts_at: inHours(24) } },
+        res
+    );
+
+    assert.equal(res.statusCode, 400);
+    assert.equal(called, false, "no debió ni intentar llamar a Mercado Pago");
+    const { rows } = await pool.query(`SELECT status FROM appointments WHERE product_id = $1`, [serviceId]);
+    assert.equal(rows.length, 0, "el hold pendiente_pago debió liberarse");
+});
+
+test("create: servicio con anticipo en negocio Pro conectado a Mercado Pago inicia el cobro sin comisión de plataforma", async (t) => {
+    const ownerId = await createUser();
+    const storeId = await createStore(ownerId, { approved: true });
+    await makeStorePro(storeId);
+    await connectMercadoPago(storeId);
+    const serviceId = await createService(storeId, { duration_minutes: 30, deposit_amount: 100 });
+    const customerId = await createUser();
+    t.after(() => cleanup({ userId: [ownerId, customerId], storeId }));
+
+    const original = mercadopago.createPreference;
+    let preferenceArgs = null;
+    mercadopago.createPreference = async (args) => {
+        preferenceArgs = args;
+        return { init_point: "https://mp.test/fake" };
+    };
+    t.after(() => {
+        mercadopago.createPreference = original;
     });
 
     const res = mockRes();
@@ -145,9 +188,10 @@ test("create: servicio con anticipo en negocio Pro inicia el cobro en vez de con
 
     assert.equal(res.statusCode, 201);
     assert.equal(res.body.requires_payment, true);
-    assert.equal(res.body.checkout_url, "https://checkout.stripe.test/fake");
-    assert.equal(sessionArgs.metadata.kind, "appointment_deposit");
-    assert.equal(sessionArgs.line_items[0].price_data.unit_amount, 10000);
+    assert.equal(res.body.checkout_url, "https://mp.test/fake");
+    assert.equal(preferenceArgs.items[0].unit_price, 100);
+    assert.equal(preferenceArgs.marketplaceFee, 0, "sin comisión de plataforma en anticipos");
+    assert.equal(preferenceArgs.externalReference, `appointment:${res.body.appointment_id}`);
 
     const { rows } = await pool.query(`SELECT status, hold_expires_at, deposit_amount FROM appointments WHERE id = $1`, [
         res.body.appointment_id,
@@ -157,24 +201,25 @@ test("create: servicio con anticipo en negocio Pro inicia el cobro en vez de con
     assert.equal(rows[0].deposit_amount, "100.00");
 });
 
-test("create: servicio con anticipo por debajo del mínimo de Stripe ($10 MXN) responde error y libera el hold", async (t) => {
+test("create: servicio con anticipo por debajo del mínimo permitido ($10 MXN) responde error y libera el hold", async (t) => {
     const ownerId = await createUser();
     const storeId = await createStore(ownerId, { approved: true });
     await makeStorePro(storeId);
+    await connectMercadoPago(storeId);
     // deposit_amount=5 viene directo de fixtures (bypasa la validación del
     // controller) para simular datos de antes de ese fix.
     const serviceId = await createService(storeId, { duration_minutes: 30, deposit_amount: 5 });
     const customerId = await createUser();
     t.after(() => cleanup({ userId: [ownerId, customerId], storeId }));
 
-    const originalCreate = stripe.checkout.sessions.create;
     let called = false;
-    stripe.checkout.sessions.create = async () => {
+    const original = mercadopago.createPreference;
+    mercadopago.createPreference = async () => {
         called = true;
-        return { url: "https://checkout.stripe.test/fake" };
+        return { init_point: "https://mp.test/fake" };
     };
     t.after(() => {
-        stripe.checkout.sessions.create = originalCreate;
+        mercadopago.createPreference = original;
     });
 
     const res = mockRes();
@@ -184,7 +229,7 @@ test("create: servicio con anticipo por debajo del mínimo de Stripe ($10 MXN) r
     );
 
     assert.equal(res.statusCode, 500);
-    assert.equal(called, false, "no debió ni intentar llamar a Stripe");
+    assert.equal(called, false, "no debió ni intentar llamar a Mercado Pago");
     const { rows } = await pool.query(`SELECT status FROM appointments WHERE product_id = $1`, [serviceId]);
     assert.equal(rows.length, 0, "el hold pendiente_pago debió liberarse");
 });
@@ -211,15 +256,16 @@ test("create: un hold 'pendiente_pago' vigente bloquea el horario (capacity=1)",
     const ownerId = await createUser();
     const storeId = await createStore(ownerId, { approved: true });
     await makeStorePro(storeId);
+    await connectMercadoPago(storeId);
     const serviceId = await createService(storeId, { duration_minutes: 30, capacity: 1, deposit_amount: 50 });
     const customerId = await createUser();
     const rivalId = await createUser();
     t.after(() => cleanup({ userId: [ownerId, customerId, rivalId], storeId }));
 
-    const originalCreate = stripe.checkout.sessions.create;
-    stripe.checkout.sessions.create = async () => ({ url: "https://checkout.stripe.test/fake" });
+    const original = mercadopago.createPreference;
+    mercadopago.createPreference = async () => ({ init_point: "https://mp.test/fake" });
     t.after(() => {
-        stripe.checkout.sessions.create = originalCreate;
+        mercadopago.createPreference = original;
     });
 
     const starts_at = inHours(24);
@@ -236,15 +282,16 @@ test("create: un hold 'pendiente_pago' YA EXPIRADO no bloquea el horario", async
     const ownerId = await createUser();
     const storeId = await createStore(ownerId, { approved: true });
     await makeStorePro(storeId);
+    await connectMercadoPago(storeId);
     const serviceId = await createService(storeId, { duration_minutes: 30, capacity: 1, deposit_amount: 50 });
     const customerId = await createUser();
     const rivalId = await createUser();
     t.after(() => cleanup({ userId: [ownerId, customerId, rivalId], storeId }));
 
-    const originalCreate = stripe.checkout.sessions.create;
-    stripe.checkout.sessions.create = async () => ({ url: "https://checkout.stripe.test/fake" });
+    const original = mercadopago.createPreference;
+    mercadopago.createPreference = async () => ({ init_point: "https://mp.test/fake" });
     t.after(() => {
-        stripe.checkout.sessions.create = originalCreate;
+        mercadopago.createPreference = original;
     });
 
     const starts_at = inHours(24);
@@ -259,18 +306,19 @@ test("create: un hold 'pendiente_pago' YA EXPIRADO no bloquea el horario", async
     assert.equal(second.statusCode, 201, "el hold expirado ya no debe contar contra la capacidad");
 });
 
-test("activateDeposit: confirma el hold, guarda el payment_intent, y es idempotente", async (t) => {
+test("activateMercadoPagoDeposit: confirma el hold, guarda el payment_id, y es idempotente", async (t) => {
     const ownerId = await createUser();
     const storeId = await createStore(ownerId, { approved: true });
     await makeStorePro(storeId);
+    await connectMercadoPago(storeId);
     const serviceId = await createService(storeId, { duration_minutes: 30, deposit_amount: 100 });
     const customerId = await createUser();
     t.after(() => cleanup({ userId: [ownerId, customerId], storeId }));
 
-    const originalCreate = stripe.checkout.sessions.create;
-    stripe.checkout.sessions.create = async () => ({ url: "https://checkout.stripe.test/fake" });
+    const original = mercadopago.createPreference;
+    mercadopago.createPreference = async () => ({ init_point: "https://mp.test/fake" });
     t.after(() => {
-        stripe.checkout.sessions.create = originalCreate;
+        mercadopago.createPreference = original;
     });
 
     const created = mockRes();
@@ -280,43 +328,44 @@ test("activateDeposit: confirma el hold, guarda el payment_intent, y es idempote
     );
     const appointmentId = created.body.appointment_id;
 
-    const session = { payment_intent: "pi_test_deposito", metadata: { appointment_id: appointmentId } };
-    await appointments.activateDeposit(session);
+    const payment = { id: "mp_test_deposito", status: "approved", external_reference: `appointment:${appointmentId}` };
+    await appointments.activateMercadoPagoDeposit(payment);
 
     const { rows } = await pool.query(
-        `SELECT status, hold_expires_at, stripe_payment_intent_id FROM appointments WHERE id = $1`,
+        `SELECT status, hold_expires_at, mercadopago_payment_id FROM appointments WHERE id = $1`,
         [appointmentId]
     );
     assert.equal(rows[0].status, "pendiente");
     assert.equal(rows[0].hold_expires_at, null);
-    assert.equal(rows[0].stripe_payment_intent_id, "pi_test_deposito");
+    assert.equal(rows[0].mercadopago_payment_id, "mp_test_deposito");
 
     // segunda vez (ej. webhook Y confirm llegan ambos): no debe romper ni duplicar.
-    await appointments.activateDeposit(session);
+    await appointments.activateMercadoPagoDeposit(payment);
     const { rows: again } = await pool.query(`SELECT status FROM appointments WHERE id = $1`, [appointmentId]);
     assert.equal(again[0].status, "pendiente");
 });
 
-test("activateDeposit: hold expirado y horario ya tomado por otro -> reembolsa y cancela", async (t) => {
+test("activateMercadoPagoDeposit: hold expirado y horario ya tomado por otro -> reembolsa y cancela", async (t) => {
     const ownerId = await createUser();
     const storeId = await createStore(ownerId, { approved: true });
     await makeStorePro(storeId);
+    await connectMercadoPago(storeId);
     const serviceId = await createService(storeId, { duration_minutes: 30, capacity: 1, deposit_amount: 50 });
     const customerId = await createUser();
     const rivalId = await createUser();
     t.after(() => cleanup({ userId: [ownerId, customerId, rivalId], storeId }));
 
-    const originalCreate = stripe.checkout.sessions.create;
-    const originalRefund = stripe.refunds.create;
-    stripe.checkout.sessions.create = async () => ({ url: "https://checkout.stripe.test/fake" });
+    const originalCreate = mercadopago.createPreference;
+    const originalRefund = mercadopago.refundPayment;
+    mercadopago.createPreference = async () => ({ init_point: "https://mp.test/fake" });
     let refundedWith = null;
-    stripe.refunds.create = async (args) => {
+    mercadopago.refundPayment = async (args) => {
         refundedWith = args;
         return { id: "re_test_fake" };
     };
     t.after(() => {
-        stripe.checkout.sessions.create = originalCreate;
-        stripe.refunds.create = originalRefund;
+        mercadopago.createPreference = originalCreate;
+        mercadopago.refundPayment = originalRefund;
     });
 
     const starts_at = inHours(24);
@@ -333,14 +382,15 @@ test("activateDeposit: hold expirado y horario ya tomado por otro -> reembolsa y
     assert.equal(rivalRes.statusCode, 201);
 
     // el pago tardío del primero llega después: ya no hay lugar
-    await appointments.activateDeposit({
-        payment_intent: "pi_test_tarde",
-        metadata: { appointment_id: appointmentId },
+    await appointments.activateMercadoPagoDeposit({
+        id: "mp_test_tarde",
+        status: "approved",
+        external_reference: `appointment:${appointmentId}`,
     });
 
     const { rows } = await pool.query(`SELECT status FROM appointments WHERE id = $1`, [appointmentId]);
     assert.equal(rows[0].status, "cancelada");
-    assert.deepEqual(refundedWith, { payment_intent: "pi_test_tarde" });
+    assert.equal(refundedWith.paymentId, "mp_test_tarde");
 });
 
 test("updateStatus: cancelar una cita con anticipo pagado reembolsa automáticamente", async (t) => {
@@ -370,6 +420,36 @@ test("updateStatus: cancelar una cita con anticipo pagado reembolsa automáticam
 
     assert.equal(res.statusCode, 200);
     assert.deepEqual(refundedWith, { payment_intent: "pi_test_pagado" });
+});
+
+test("updateStatus: cancelar una cita con anticipo pagado por Mercado Pago reembolsa con el token del negocio", async (t) => {
+    const ownerId = await createUser();
+    const storeId = await createStore(ownerId, { approved: true });
+    await connectMercadoPago(storeId);
+    const serviceId = await createService(storeId);
+    const customerId = await createUser();
+    t.after(() => cleanup({ userId: [ownerId, customerId], storeId }));
+
+    const created = mockRes();
+    await appointments.create({ user: { id: customerId }, body: { product_id: serviceId, starts_at: inHours(24) } }, created);
+    const apptId = created.body.id;
+    await pool.query(`UPDATE appointments SET mercadopago_payment_id = 'mp_test_anticipo' WHERE id = $1`, [apptId]);
+
+    const original = mercadopago.refundPayment;
+    let refundedWith = null;
+    mercadopago.refundPayment = async (args) => {
+        refundedWith = args;
+        return { id: "re_test_fake" };
+    };
+    t.after(() => {
+        mercadopago.refundPayment = original;
+    });
+
+    const res = mockRes();
+    await appointments.updateStatus({ user: { id: customerId }, params: { id: apptId }, body: { status: "cancelada" } }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(refundedWith.paymentId, "mp_test_anticipo");
 });
 
 test("updateStatus: cancelar una cita completada no reembolsa (el ciclo de vida no retrocede)", async (t) => {
@@ -426,14 +506,15 @@ test("listMine/listForStore: nunca muestran holds 'pendiente_pago'", async (t) =
     const ownerId = await createUser();
     const storeId = await createStore(ownerId, { approved: true });
     await makeStorePro(storeId);
+    await connectMercadoPago(storeId);
     const serviceId = await createService(storeId, { duration_minutes: 30, deposit_amount: 100 });
     const customerId = await createUser();
     t.after(() => cleanup({ userId: [ownerId, customerId], storeId }));
 
-    const originalCreate = stripe.checkout.sessions.create;
-    stripe.checkout.sessions.create = async () => ({ url: "https://checkout.stripe.test/fake" });
+    const original = mercadopago.createPreference;
+    mercadopago.createPreference = async () => ({ init_point: "https://mp.test/fake" });
     t.after(() => {
-        stripe.checkout.sessions.create = originalCreate;
+        mercadopago.createPreference = original;
     });
 
     const created = mockRes();

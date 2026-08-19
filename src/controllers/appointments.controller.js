@@ -1,13 +1,15 @@
 const pool = require("../config/db");
 const stripe = require("../config/stripe");
+const mercadopago = require("../lib/mercadopago");
+const { decrypt } = require("../lib/crypto");
 const { sendEmail } = require("../config/email");
-const { frontendUrl } = require("../lib/frontendUrl");
+const { frontendUrl, backendUrl } = require("../lib/frontendUrl");
 // WhatsApp: descomentar junto con notifyCancellationAlert() de abajo y con
 // WHATSAPP_TOKEN/WHATSAPP_PHONE_NUMBER_ID en .env.
 // const { sendCancellationAlert } = require("../lib/whatsappNotifications");
 
 const STATUSES = ["pendiente", "confirmada", "cancelada", "completada", "no_asistio"];
-// Cuánto se aparta el horario mientras el cliente paga el anticipo en Stripe.
+// Cuánto se aparta el horario mientras el cliente paga el anticipo.
 const HOLD_MINUTES = 10;
 
 // Igual que ALLOWED_TRANSITIONS en orders.controller.js: el ciclo de vida
@@ -101,7 +103,7 @@ async function create(req, res) {
 
         const { rows: productRows } = await client.query(
             `SELECT p.id, p.name, p.duration_minutes, p.capacity, p.is_active, p.deposit_amount,
-                    s.name AS store_name, u.email AS owner_email, pl.deposit_payments
+                    s.name AS store_name, s.mercadopago_access_token, u.email AS owner_email, pl.deposit_payments
              FROM products p
              JOIN stores s ON s.id = p.store_id
              JOIN users u ON u.id = s.owner_id
@@ -187,37 +189,48 @@ async function create(req, res) {
         return res.status(201).json(appointment);
     }
 
-    // Requiere anticipo: el hold ya está reservado (arriba); ahora se genera
-    // el cobro. Si Stripe falla, se borra el hold para no dejar el horario
-    // bloqueado 10 minutos por nada.
+    // Requiere anticipo: el hold ya está reservado (arriba). El anticipo
+    // siempre cae directo al negocio (marketplaceFee: 0, sin comisión de
+    // plataforma en anticipos) -- por eso hace falta que el negocio ya haya
+    // conectado su cuenta de Mercado Pago; si no, no hay a dónde mandar el
+    // cobro y se borra el hold para no dejar el horario bloqueado 10
+    // minutos por nada.
+    if (!service.mercadopago_access_token) {
+        await pool.query(`DELETE FROM appointments WHERE id = $1 AND status = 'pendiente_pago'`, [appointment.id]);
+        return res.status(400).json({
+            error: "Este negocio requiere anticipo pero aún no conecta Mercado Pago; contáctalo directamente para reservar.",
+        });
+    }
+    // services.controller.js#STRIPE_MXN_MINIMUM ya evita configurar un
+    // anticipo así de chico; esto solo cubre datos de antes de ese fix.
+    if (Number(service.deposit_amount) < 10) {
+        await pool.query(`DELETE FROM appointments WHERE id = $1 AND status = 'pendiente_pago'`, [appointment.id]);
+        return res.status(500).json({
+            error: "El anticipo configurado para este servicio es menor al mínimo permitido ($10.00 MXN). Avísale al negocio para que lo corrija.",
+        });
+    }
     try {
-        // Stripe rechaza cobros menores a $10.00 MXN (ver
-        // services.controller.js#STRIPE_MXN_MINIMUM, que ya evita configurar
-        // un anticipo así de chico; esto solo cubre datos de antes de ese fix).
-        if (Math.round(Number(service.deposit_amount) * 100) < 1000) {
-            await pool.query(`DELETE FROM appointments WHERE id = $1 AND status = 'pendiente_pago'`, [appointment.id]);
-            return res.status(500).json({
-                error: "El anticipo configurado para este servicio es menor al mínimo que permite Stripe ($10.00 MXN). Avísale al negocio para que lo corrija.",
-            });
-        }
         const frontend = frontendUrl();
-        const session = await stripe.checkout.sessions.create({
-            mode: "payment",
-            line_items: [
+        const preference = await mercadopago.createPreference({
+            accessToken: decrypt(service.mercadopago_access_token),
+            items: [
                 {
+                    title: `Anticipo: ${service.name}`,
                     quantity: 1,
-                    price_data: {
-                        currency: "mxn",
-                        unit_amount: Math.round(Number(service.deposit_amount) * 100),
-                        product_data: { name: `Anticipo: ${service.name}` },
-                    },
+                    unit_price: Number(service.deposit_amount),
+                    currency_id: "MXN",
                 },
             ],
-            metadata: { kind: "appointment_deposit", appointment_id: appointment.id },
-            success_url: `${frontend}/mis-citas?deposit_session_id={CHECKOUT_SESSION_ID}`,
-            cancel_url: `${frontend}/servicios/${product_id}`,
+            marketplaceFee: 0,
+            backUrls: {
+                success: `${frontend}/mis-citas`,
+                failure: `${frontend}/servicios/${product_id}`,
+                pending: `${frontend}/servicios/${product_id}`,
+            },
+            notificationUrl: `${backendUrl()}/api/mercadopago/webhook`,
+            externalReference: `appointment:${appointment.id}`,
         });
-        res.status(201).json({ requires_payment: true, checkout_url: session.url, appointment_id: appointment.id });
+        res.status(201).json({ requires_payment: true, checkout_url: preference.init_point, appointment_id: appointment.id });
     } catch (err) {
         await pool.query(`DELETE FROM appointments WHERE id = $1 AND status = 'pendiente_pago'`, [appointment.id]);
         console.error("appointments.create: fallo iniciando el cobro del anticipo:", err.message);
@@ -226,16 +239,16 @@ async function create(req, res) {
 }
 
 // Núcleo compartido entre la confirmación que dispara el navegador y el
-// webhook de Stripe (mismo patrón que fulfillStripeSession en
+// webhook de Mercado Pago (mismo patrón que fulfillMercadoPagoPayment en
 // orders.controller.js). Idempotente: si el hold ya no está en
 // 'pendiente_pago' (ya se activó o se canceló), no hace nada.
-async function activateDeposit(session) {
-    const appointmentId = session.metadata?.appointment_id;
-    if (!appointmentId) return;
+async function activateMercadoPagoDeposit(payment) {
+    const [kind, appointmentId] = String(payment.external_reference || "").split(":");
+    if (kind !== "appointment" || !appointmentId) return;
 
     const { rows } = await pool.query(
         `SELECT a.id, a.product_id, a.starts_at, a.ends_at, a.status, a.capacity_snapshot, a.hold_expires_at,
-                p.name AS service_name, s.name AS store_name, u.email AS owner_email
+                p.name AS service_name, s.name AS store_name, s.mercadopago_access_token, u.email AS owner_email
          FROM appointments a
          JOIN products p ON p.id = a.product_id
          JOIN stores s ON s.id = p.store_id
@@ -248,7 +261,7 @@ async function activateDeposit(session) {
 
     // El hold ya venció: si alguien más ocupó el cupo mientras tanto, no hay
     // lugar. Reembolsa en vez de sobrevender (mismo criterio que
-    // fulfillStripeSession con inventario agotado).
+    // fulfillMercadoPagoPayment con inventario agotado).
     if (appt.hold_expires_at && new Date(appt.hold_expires_at) < new Date()) {
         // Mismo criterio de "ocupado" que create()/availability(): un hold
         // rival todavía vigente también cuenta, no solo citas ya confirmadas.
@@ -268,11 +281,14 @@ async function activateDeposit(session) {
                  WHERE id = $1 AND status = 'pendiente_pago' RETURNING id`,
                 [appt.id]
             );
-            if (canceled[0] && session.payment_intent) {
+            if (canceled[0] && appt.mercadopago_access_token) {
                 try {
-                    await stripe.refunds.create({ payment_intent: session.payment_intent });
+                    await mercadopago.refundPayment({
+                        accessToken: decrypt(appt.mercadopago_access_token),
+                        paymentId: payment.id,
+                    });
                 } catch (err) {
-                    console.error("appointments.activateDeposit: fallo el reembolso:", err.message);
+                    console.error("appointments.activateMercadoPagoDeposit: fallo el reembolso:", err.message);
                 }
             }
             return;
@@ -282,9 +298,9 @@ async function activateDeposit(session) {
     // Mismo compare-and-swap: evita notificar dos veces si el webhook y la
     // confirmación del navegador procesan la misma sesión casi a la vez.
     const { rows: activated } = await pool.query(
-        `UPDATE appointments SET status = 'pendiente', hold_expires_at = NULL, stripe_payment_intent_id = $1, updated_at = NOW()
+        `UPDATE appointments SET status = 'pendiente', hold_expires_at = NULL, mercadopago_payment_id = $1, updated_at = NOW()
          WHERE id = $2 AND status = 'pendiente_pago' RETURNING id`,
-        [session.payment_intent, appt.id]
+        [String(payment.id), appt.id]
     );
     if (!activated[0]) return;
 
@@ -296,34 +312,39 @@ async function activateDeposit(session) {
     });
 }
 
-// El frontend llama esto al volver de Stripe para activar la cita al
+// El frontend llama esto al volver de Mercado Pago para activar la cita al
 // instante; el webhook (fuente confiable) la activa de todos modos si el
 // cliente nunca vuelve.
-async function confirmDeposit(req, res) {
-    const { session_id } = req.body;
-    if (!session_id) return res.status(400).json({ error: "session_id es requerido" });
+async function confirmMercadoPagoDeposit(req, res) {
+    const { payment_id, external_reference } = req.body;
+    if (!payment_id || !external_reference) {
+        return res.status(400).json({ error: "payment_id y external_reference son requeridos" });
+    }
+    const [kind, appointmentId] = String(external_reference).split(":");
+    if (kind !== "appointment") {
+        return res.status(400).json({ error: "Referencia de pago inválida" });
+    }
     try {
-        const session = await stripe.checkout.sessions.retrieve(session_id);
-        if (session.metadata?.kind !== "appointment_deposit") {
-            return res.status(400).json({ error: "Sesión inválida" });
-        }
-        const { rows } = await pool.query(`SELECT customer_id FROM appointments WHERE id = $1`, [
-            session.metadata.appointment_id,
-        ]);
+        const { rows } = await pool.query(`SELECT customer_id FROM appointments WHERE id = $1`, [appointmentId]);
         if (!rows[0]) return res.status(404).json({ error: "Cita no encontrada" });
         if (rows[0].customer_id !== req.user.id) {
             return res.status(403).json({ error: "Esta cita no te pertenece" });
         }
-        if (session.status !== "complete") {
+        // Se usa el access_token de la propia plataforma para consultar el
+        // pago (la app que medió el OAuth puede ver los pagos que facilitó);
+        // el token del negocio solo se vuelve a necesitar para un reembolso.
+        const payment = await mercadopago.getPayment({
+            accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN,
+            paymentId: payment_id,
+        });
+        if (payment.status !== "approved") {
             return res.status(402).json({ error: "El pago no se ha completado" });
         }
-        await activateDeposit(session);
-        const { rows: updated } = await pool.query(`SELECT * FROM appointments WHERE id = $1`, [
-            session.metadata.appointment_id,
-        ]);
+        await activateMercadoPagoDeposit(payment);
+        const { rows: updated } = await pool.query(`SELECT * FROM appointments WHERE id = $1`, [appointmentId]);
         res.json(updated[0]);
     } catch (err) {
-        console.error("appointments.confirmDeposit error:", err.message);
+        console.error("appointments.confirmMercadoPagoDeposit error:", err.message);
         res.status(500).json({ error: "Error interno del servidor" });
     }
 }
@@ -374,7 +395,8 @@ async function updateStatus(req, res) {
 
     try {
         const { rows } = await pool.query(
-            `SELECT a.id, a.customer_id, a.status, a.stripe_payment_intent_id, u.email AS customer_email, s.owner_id, p.name AS service_name
+            `SELECT a.id, a.customer_id, a.status, a.stripe_payment_intent_id, a.mercadopago_payment_id,
+                    s.mercadopago_access_token, u.email AS customer_email, s.owner_id, p.name AS service_name
              FROM appointments a
              JOIN products p ON p.id = a.product_id
              JOIN stores s ON s.id = p.store_id
@@ -408,11 +430,24 @@ async function updateStatus(req, res) {
         // Anticipo pagado + cancelación (por cualquiera de las dos partes) =
         // reembolso automático, como se pidió. appt.status !== "cancelada" evita
         // reintentar el reembolso si ya estaba cancelada (ej. doble click).
-        if (status === "cancelada" && appt.status !== "cancelada" && appt.stripe_payment_intent_id) {
-            try {
-                await stripe.refunds.create({ payment_intent: appt.stripe_payment_intent_id });
-            } catch (err) {
-                console.error("appointments.updateStatus: fallo el reembolso del anticipo:", err.message);
+        // stripe_payment_intent_id cubre anticipos cobrados antes de este
+        // cambio (Mercado Pago reemplazó a Stripe para anticipos nuevos).
+        if (status === "cancelada" && appt.status !== "cancelada") {
+            if (appt.stripe_payment_intent_id) {
+                try {
+                    await stripe.refunds.create({ payment_intent: appt.stripe_payment_intent_id });
+                } catch (err) {
+                    console.error("appointments.updateStatus: fallo el reembolso del anticipo (Stripe):", err.message);
+                }
+            } else if (appt.mercadopago_payment_id && appt.mercadopago_access_token) {
+                try {
+                    await mercadopago.refundPayment({
+                        accessToken: decrypt(appt.mercadopago_access_token),
+                        paymentId: appt.mercadopago_payment_id,
+                    });
+                } catch (err) {
+                    console.error("appointments.updateStatus: fallo el reembolso del anticipo (Mercado Pago):", err.message);
+                }
             }
         }
 
@@ -436,4 +471,11 @@ async function updateStatus(req, res) {
     }
 }
 
-module.exports = { create, listMine, listForStore, updateStatus, confirmDeposit, activateDeposit };
+module.exports = {
+    create,
+    listMine,
+    listForStore,
+    updateStatus,
+    confirmMercadoPagoDeposit,
+    activateMercadoPagoDeposit,
+};

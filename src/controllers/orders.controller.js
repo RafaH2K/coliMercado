@@ -1,9 +1,10 @@
 const pool = require("../config/db");
 const stripe = require("../config/stripe");
+const mercadopago = require("../lib/mercadopago");
+const { decrypt } = require("../lib/crypto");
 const { sendEmail } = require("../config/email");
-const { frontendUrl } = require("../lib/frontendUrl");
+const { frontendUrl, backendUrl } = require("../lib/frontendUrl");
 const plans = require("./plans.controller");
-const appointments = require("./appointments.controller");
 
 // No se espera (fire-and-forget): un correo que tarda o falla no debe
 // retrasar ni tumbar la respuesta del pedido. Los errores solo se loggean.
@@ -36,17 +37,12 @@ const ITEMS_SUBQUERY = `
     ) AS items
 `;
 
-// Recargo solo en el pago con tarjeta (Stripe): cubre la comisión de Stripe
-// (~3%) y deja margen para la plataforma. Es puramente sobre lo que cobra
-// Stripe — el pedido y las estadísticas del negocio (placeOrders, más abajo)
-// siguen calculándose sobre products.price sin este recargo, así que al
-// negocio no le cambia nada de lo que ve ni de lo que se le reporta.
-const STRIPE_CARD_SURCHARGE = 1.12;
-// Stripe rechaza cualquier Checkout Session cuyo total sea menor a esto para
-// MXN (https://stripe.com/docs/currencies#minimum-and-maximum-charge-amounts).
-// Sin este chequeo, un carrito chico truena en Stripe con un 500 genérico en
-// vez de decirle al cliente por qué no puede pagar con tarjeta.
-const STRIPE_MXN_MINIMUM_CENTS = 1000;
+// Recargo solo en el pago con tarjeta (Mercado Pago): cubre la comisión de
+// la plataforma. El negocio siempre recibe exactamente su precio de lista
+// -- la diferencia entre lo que paga el cliente y ese precio de lista se
+// declara como marketplace_fee al crear la preferencia, y Mercado Pago la
+// separa automáticamente hacia la cuenta de la plataforma.
+const MERCADOPAGO_CARD_SURCHARGE = 1.12;
 
 class CheckoutError extends Error {
     constructor(status, message) {
@@ -71,8 +67,11 @@ async function fetchOrdersByIds(ids) {
 // mezclar productos de varias tiendas; cada tienda ve y gestiona sus propios
 // pedidos). El inventario se descuenta de forma atómica (UPDATE ... WHERE
 // stock >= qty) para que dos checkouts concurrentes no sobrevendan.
-// Compartido entre el pago en efectivo/persona y la confirmación de Stripe.
-async function placeOrders(userId, { provider, status, stripeSessionId = null }) {
+// Compartido entre el pago en efectivo/persona y la confirmación de Mercado
+// Pago. storeId acota el carrito a un solo negocio (un pago de Mercado Pago
+// solo puede ir a UNA cuenta conectada, ver createMercadoPagoCheckoutSession)
+// -- si se omite, se procesa el carrito completo (pago en persona).
+async function placeOrders(userId, { provider, status, mercadopagoPaymentId = null }, storeId = null) {
     const client = await pool.connect();
     try {
         await client.query("BEGIN");
@@ -80,8 +79,8 @@ async function placeOrders(userId, { provider, status, stripeSessionId = null })
         const { rows: cartRows } = await client.query(
             `SELECT ci.product_id, ci.quantity, p.price, p.store_id, p.is_active
              FROM cart_items ci JOIN products p ON p.id = ci.product_id
-             WHERE ci.user_id = $1`,
-            [userId]
+             WHERE ci.user_id = $1 AND ($2::uuid IS NULL OR p.store_id = $2)`,
+            [userId, storeId]
         );
         if (cartRows.length === 0) throw new CheckoutError(400, "Tu carrito está vacío");
         if (cartRows.some((item) => !item.is_active)) {
@@ -95,7 +94,7 @@ async function placeOrders(userId, { provider, status, stripeSessionId = null })
         }
 
         const createdOrders = [];
-        for (const [storeId, items] of byStore) {
+        for (const [orderStoreId, items] of byStore) {
             let total = 0;
             for (const item of items) {
                 const { rows } = await client.query(
@@ -108,7 +107,7 @@ async function placeOrders(userId, { provider, status, stripeSessionId = null })
 
             const { rows: orderRows } = await client.query(
                 `INSERT INTO orders (user_id, store_id, total_amount, status) VALUES ($1, $2, $3, $4) RETURNING *`,
-                [userId, storeId, total, status]
+                [userId, orderStoreId, total, status]
             );
             const order = orderRows[0];
 
@@ -119,14 +118,17 @@ async function placeOrders(userId, { provider, status, stripeSessionId = null })
                 );
             }
             await client.query(
-                `INSERT INTO payments (order_id, amount, provider, status, stripe_session_id) VALUES ($1, $2, $3, $4, $5)`,
-                [order.id, total, provider, status === "pagado" ? "pagado" : "pendiente", stripeSessionId]
+                `INSERT INTO payments (order_id, amount, provider, status, mercadopago_payment_id) VALUES ($1, $2, $3, $4, $5)`,
+                [order.id, total, provider, status === "pagado" ? "pagado" : "pendiente", mercadopagoPaymentId]
             );
 
             createdOrders.push(order);
         }
 
-        await client.query(`DELETE FROM cart_items WHERE user_id = $1`, [userId]);
+        await client.query(
+            `DELETE FROM cart_items WHERE user_id = $1 AND product_id IN (SELECT id FROM products WHERE store_id = ANY($2::uuid[]))`,
+            [userId, [...byStore.keys()]]
+        );
         await client.query("COMMIT");
         for (const order of createdOrders) notifyNewOrder(order);
         return createdOrders;
@@ -149,98 +151,128 @@ async function checkout(req, res) {
     }
 }
 
-// Crea una Stripe Checkout Session a partir del carrito actual y devuelve la
-// URL hospedada por Stripe a la que el frontend debe redirigir. No toca el
-// carrito ni el inventario todavía: eso pasa hasta confirmStripeSession,
-// cuando Stripe ya confirmó el cobro.
-async function createCheckoutSession(req, res) {
+// Crea una preferencia de pago (Checkout Pro) de Mercado Pago para los
+// items del carrito de UN solo negocio -- una preferencia solo puede
+// cobrar a nombre de UNA cuenta de Mercado Pago, así que un carrito con
+// productos de varias tiendas se paga con un botón por tienda (ver
+// Cart.tsx). No toca el carrito ni el inventario todavía: eso pasa hasta
+// confirmMercadoPagoPayment, cuando el pago ya está aprobado.
+async function createMercadoPagoCheckoutSession(req, res) {
+    const { store_id } = req.body;
+    if (!store_id) return res.status(400).json({ error: "store_id es requerido" });
     try {
+        const { rows: storeRows } = await pool.query(`SELECT mercadopago_access_token FROM stores WHERE id = $1`, [
+            store_id,
+        ]);
+        const encryptedToken = storeRows[0]?.mercadopago_access_token;
+        if (!encryptedToken) {
+            return res
+                .status(400)
+                .json({ error: "Este negocio no ha conectado Mercado Pago; paga en persona o elige otro negocio" });
+        }
+
         const { rows: cartRows } = await pool.query(
             `SELECT ci.product_id, ci.quantity, p.name, p.price, p.is_active
              FROM cart_items ci JOIN products p ON p.id = ci.product_id
-             WHERE ci.user_id = $1`,
-            [req.user.id]
+             WHERE ci.user_id = $1 AND p.store_id = $2`,
+            [req.user.id, store_id]
         );
-        if (cartRows.length === 0) return res.status(400).json({ error: "Tu carrito está vacío" });
+        if (cartRows.length === 0) {
+            return res.status(400).json({ error: "No tienes productos de este negocio en tu carrito" });
+        }
         if (cartRows.some((item) => !item.is_active)) {
             return res.status(409).json({ error: "Un producto de tu carrito ya no está disponible" });
         }
 
-        const lineItems = cartRows.map((item) => ({
+        const items = cartRows.map((item) => ({
+            title: item.name,
             quantity: item.quantity,
-            price_data: {
-                currency: "mxn",
-                unit_amount: Math.round(Number(item.price) * 100 * STRIPE_CARD_SURCHARGE),
-                product_data: { name: item.name },
-            },
+            unit_price: Number((Number(item.price) * MERCADOPAGO_CARD_SURCHARGE).toFixed(2)),
+            currency_id: "MXN",
         }));
-        const total = lineItems.reduce((sum, li) => sum + li.price_data.unit_amount * li.quantity, 0);
-        if (total < STRIPE_MXN_MINIMUM_CENTS) {
-            throw new CheckoutError(
-                400,
-                `El total de tu carrito debe ser de al menos $${(STRIPE_MXN_MINIMUM_CENTS / 100).toFixed(2)} MXN para pagar con tarjeta. Agrega más productos o paga en persona con el negocio.`
-            );
-        }
+        const listedTotal = cartRows.reduce((sum, item) => sum + Number(item.price) * item.quantity, 0);
+        const chargedTotal = items.reduce((sum, it) => sum + it.unit_price * it.quantity, 0);
+        // El negocio recibe exactamente su precio de lista (listedTotal); lo
+        // que se le cobró de más al cliente por el recargo es la comisión de
+        // la plataforma. Se calcula sobre los montos YA redondeados a 2
+        // decimales (no sobre listedTotal * 0.12) para que la cuenta cuadre
+        // centavo a centavo con lo que Mercado Pago realmente va a cobrar.
+        const marketplaceFee = Number((chargedTotal - listedTotal).toFixed(2));
 
         const frontend = frontendUrl();
-        const session = await stripe.checkout.sessions.create({
-            mode: "payment",
-            line_items: lineItems,
-            metadata: { user_id: req.user.id },
-            success_url: `${frontend}/carrito/exito?session_id={CHECKOUT_SESSION_ID}`,
-            cancel_url: `${frontend}/carrito`,
+        const preference = await mercadopago.createPreference({
+            accessToken: decrypt(encryptedToken),
+            items,
+            marketplaceFee,
+            backUrls: {
+                success: `${frontend}/carrito/exito`,
+                failure: `${frontend}/carrito`,
+                pending: `${frontend}/carrito`,
+            },
+            notificationUrl: `${backendUrl()}/api/mercadopago/webhook`,
+            externalReference: `order:${req.user.id}:${store_id}`,
         });
-        res.json({ url: session.url });
+        res.json({ url: preference.init_point });
     } catch (err) {
-        if (err instanceof CheckoutError) return res.status(err.status).json({ error: err.message });
-        console.error("orders.createCheckoutSession error:", err.message);
-        res.status(500).json({ error: "Error interno del servidor" });
+        console.error("orders.createMercadoPagoCheckoutSession error:", err.message);
+        res.status(500).json({ error: "No se pudo iniciar el cobro con Mercado Pago" });
     }
 }
 
 // Núcleo compartido entre la confirmación que dispara el navegador (rápida,
 // pero se pierde si el cliente cierra la pestaña antes de volver) y el
-// webhook de Stripe (más lento, pero siempre llega). Cualquiera de los dos
-// que llegue primero genera los pedidos; el otro es un no-op gracias a la
-// unicidad de stripe_session_id.
-async function fulfillStripeSession(session) {
+// webhook de Mercado Pago (más lento, pero siempre llega) -- mismo patrón
+// dual que ya usaba Stripe. `payment` ya viene consultado por el llamador
+// (con el access_token que haya podido usar cada uno para obtenerlo);
+// aquí solo se usa su resultado, y el token del negocio se vuelve a
+// necesitar únicamente si hay que reembolsar.
+async function fulfillMercadoPagoPayment({ payment, userId, storeId }) {
+    const paymentId = String(payment.id);
     const { rows: existingPayment } = await pool.query(
-        `SELECT order_id FROM payments WHERE stripe_session_id = $1`,
-        [session.id]
+        `SELECT order_id FROM payments WHERE mercadopago_payment_id = $1`,
+        [paymentId]
     );
     if (existingPayment.length > 0) {
         return { orders: await fetchOrdersByIds(existingPayment.map((p) => p.order_id)), created: false };
     }
-    if (session.payment_status !== "paid") {
+    if (payment.status !== "approved") {
         throw new CheckoutError(402, "El pago no se ha completado");
     }
-    const userId = session.metadata?.user_id;
-    if (!userId) throw new CheckoutError(400, "La sesión de pago no tiene un usuario asociado");
 
     try {
-        const created = await placeOrders(userId, { provider: "stripe", status: "pagado", stripeSessionId: session.id });
+        const created = await placeOrders(
+            userId,
+            { provider: "mercadopago", status: "pagado", mercadopagoPaymentId: paymentId },
+            storeId
+        );
         return { orders: await fetchOrdersByIds(created.map((o) => o.id)), created: true };
     } catch (err) {
-        // 23505 = unique_violation: otra llamada concurrente (el navegador y el
-        // webhook casi al mismo tiempo) ya insertó el pago primero.
+        // 23505 = unique_violation: otra llamada concurrente (el navegador y
+        // el webhook casi al mismo tiempo) ya insertó el pago primero.
         if (err.code === "23505") {
             const { rows: existing } = await pool.query(
-                `SELECT order_id FROM payments WHERE stripe_session_id = $1`,
-                [session.id]
+                `SELECT order_id FROM payments WHERE mercadopago_payment_id = $1`,
+                [paymentId]
             );
             return { orders: await fetchOrdersByIds(existing.map((p) => p.order_id)), created: false };
         }
         if (err instanceof CheckoutError) {
-            // Ya se pagó de verdad en Stripe (session.payment_status === "paid").
-            // Si el pedido no se puede generar (ej. se agotó el inventario en el
-            // intervalo entre pagar y confirmar), hay que devolver el dinero:
-            // quedarnos con el cobro sin entregar nada no es aceptable.
+            // Ya se cobró de verdad en Mercado Pago (payment.status ===
+            // "approved"). Si el pedido no se puede generar (ej. se agotó el
+            // inventario en el intervalo entre pagar y confirmar), hay que
+            // devolver el dinero -- quedarnos con el cobro sin entregar nada
+            // no es aceptable (mismo criterio que el flujo de Stripe de antes).
             try {
-                if (session.payment_intent) {
-                    await stripe.refunds.create({ payment_intent: session.payment_intent });
+                const { rows: storeRows } = await pool.query(
+                    `SELECT mercadopago_access_token FROM stores WHERE id = $1`,
+                    [storeId]
+                );
+                const encryptedToken = storeRows[0]?.mercadopago_access_token;
+                if (encryptedToken) {
+                    await mercadopago.refundPayment({ accessToken: decrypt(encryptedToken), paymentId });
                 }
             } catch (refundErr) {
-                console.error("orders.fulfillStripeSession refund error:", refundErr.message);
+                console.error("orders.fulfillMercadoPagoPayment refund error:", refundErr.message);
             }
             err.message = `${err.message}. Tu pago fue reembolsado automáticamente.`;
         }
@@ -248,43 +280,42 @@ async function fulfillStripeSession(session) {
     }
 }
 
-// El frontend llama esto desde la página de éxito tras volver de Stripe, para
-// mostrar el pedido al instante. El webhook (ver handleStripeWebhook) es la
-// vía confiable que igual genera el pedido si el usuario nunca vuelve.
-async function confirmStripeSession(req, res) {
-    const { session_id } = req.body;
-    if (!session_id) return res.status(400).json({ error: "session_id es requerido" });
+// El frontend llama esto desde la página de éxito tras volver de Mercado
+// Pago, para mostrar el pedido al instante. El webhook (ver
+// mercadopago.controller.js#webhook) es la vía confiable que igual genera
+// el pedido si el cliente nunca vuelve.
+async function confirmMercadoPagoPayment(req, res) {
+    const { payment_id, external_reference } = req.body;
+    if (!payment_id || !external_reference) {
+        return res.status(400).json({ error: "payment_id y external_reference son requeridos" });
+    }
+    const [kind, userId, storeId] = String(external_reference).split(":");
+    if (kind !== "order") {
+        return res.status(400).json({ error: "Referencia de pago inválida" });
+    }
+    if (userId !== req.user.id) {
+        return res.status(403).json({ error: "Este pago no te pertenece" });
+    }
     try {
-        // Atajo barato: si ya se procesó (por este mismo endpoint antes, o por
-        // el webhook mientras tanto), no hace falta ni llamar a Stripe de nuevo.
-        const { rows: existingPayment } = await pool.query(
-            `SELECT o.id AS order_id, o.user_id FROM payments p JOIN orders o ON o.id = p.order_id WHERE p.stripe_session_id = $1`,
-            [session_id]
-        );
-        if (existingPayment.length > 0) {
-            if (existingPayment[0].user_id !== req.user.id) {
-                return res.status(403).json({ error: "Esta sesión de pago no te pertenece" });
-            }
-            return res.status(200).json(await fetchOrdersByIds(existingPayment.map((p) => p.order_id)));
-        }
-
-        const session = await stripe.checkout.sessions.retrieve(session_id);
-        if (session.metadata?.user_id !== req.user.id) {
-            return res.status(403).json({ error: "Esta sesión de pago no te pertenece" });
-        }
-        const { orders, created } = await fulfillStripeSession(session);
+        // Se usa el access_token de la propia plataforma para consultar el
+        // pago (la app que medió el OAuth puede ver los pagos que facilitó);
+        // el token del negocio solo se vuelve a necesitar para un reembolso.
+        const payment = await mercadopago.getPayment({
+            accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN,
+            paymentId: payment_id,
+        });
+        const { orders, created } = await fulfillMercadoPagoPayment({ payment, userId, storeId });
         res.status(created ? 201 : 200).json(orders);
     } catch (err) {
         if (err instanceof CheckoutError) return res.status(err.status).json({ error: err.message });
-        console.error("orders.confirmStripeSession error:", err.message);
+        console.error("orders.confirmMercadoPagoPayment error:", err.message);
         res.status(500).json({ error: "Error interno del servidor" });
     }
 }
 
-// Fuente de verdad de los pagos: Stripe llama aquí server-to-server, así que
-// el pedido se genera aunque el cliente nunca vuelva a /carrito/exito. Monta
-// con express.raw() en app.js (antes de express.json()), Stripe firma el
-// cuerpo crudo para verificar que la llamada viene realmente de Stripe.
+// Único checkout que sigue en Stripe: alta de suscripción de plan (ver
+// plans.controller.js). Carrito y anticipo de citas ahora van por Mercado
+// Pago (ver mercadopago.controller.js#webhook).
 async function handleStripeWebhook(req, res) {
     let event;
     try {
@@ -297,16 +328,8 @@ async function handleStripeWebhook(req, res) {
     try {
         if (event.type === "checkout.session.completed") {
             const session = event.data.object;
-            // "carrito", "alta de plan" y "anticipo de cita" comparten el mismo
-            // endpoint de webhook (Stripe solo permite configurar una URL por
-            // evento). El anticipo va en mode:"payment" igual que el carrito,
-            // por eso se distingue por metadata.kind y no por session.mode.
-            if (session.metadata?.kind === "appointment_deposit") {
-                await appointments.activateDeposit(session);
-            } else if (session.mode === "subscription") {
+            if (session.mode === "subscription") {
                 await plans.handleSubscriptionCheckoutCompleted(session);
-            } else {
-                await fulfillStripeSession(session);
             }
         } else if (event.type === "customer.subscription.updated") {
             await plans.handleSubscriptionUpdated(event.data.object);
@@ -314,8 +337,8 @@ async function handleStripeWebhook(req, res) {
             await plans.handleSubscriptionDeleted(event.data.object);
         }
     } catch (err) {
-        // Ya se hizo lo posible (incl. el reembolso si aplicaba); solo se
-        // deja registro. Si Stripe no recibe 2xx, reintentará el webhook.
+        // Ya se hizo lo posible; solo se deja registro. Si Stripe no recibe
+        // 2xx, reintentará el webhook.
         console.error("stripe webhook: fulfillment error:", err.message);
     }
     res.json({ received: true });
@@ -356,11 +379,11 @@ async function listForStore(req, res) {
 const STATUSES = ["pendiente", "pagado", "entregado", "cancelado"];
 
 // El ciclo de vida de un pedido solo avanza, nunca retrocede: "pagado" (por
-// Stripe o porque el dueño cobró en efectivo) no debe poder regresarse a
-// "pendiente" -- entre otras cosas porque StatsPanel.tsx cuenta como ingreso
-// todo lo que esté en pagado/entregado, y retroceder el estado le haría
-// desaparecer ingresos ya reales de las estadísticas del negocio.
-// "entregado" y "cancelado" son terminales.
+// Mercado Pago o porque el dueño cobró en efectivo) no debe poder
+// regresarse a "pendiente" -- entre otras cosas porque StatsPanel.tsx
+// cuenta como ingreso todo lo que esté en pagado/entregado, y retroceder el
+// estado le haría desaparecer ingresos ya reales de las estadísticas del
+// negocio. "entregado" y "cancelado" son terminales.
 const ALLOWED_TRANSITIONS = {
     pendiente: ["pagado", "cancelado"],
     pagado: ["entregado", "cancelado"],
@@ -375,7 +398,7 @@ async function updateStatus(req, res) {
     }
     try {
         const { rows } = await pool.query(
-            `SELECT o.id, o.status, s.owner_id FROM orders o JOIN stores s ON s.id = o.store_id WHERE o.id = $1`,
+            `SELECT o.id, o.status, o.store_id, s.owner_id FROM orders o JOIN stores s ON s.id = o.store_id WHERE o.id = $1`,
             [req.params.id]
         );
         const order = rows[0];
@@ -396,24 +419,42 @@ async function updateStatus(req, res) {
             [status, req.params.id]
         );
 
-        // Un pedido pagado con tarjeta que se cancela debe devolver el cobro
-        // -- mismo criterio que ya aplica appointments.js al cancelar una
-        // cita con anticipo pagado. Los pedidos en efectivo nunca pasaron
-        // por Stripe (provider='efectivo'), no hay nada que reembolsar ahí.
+        // Un pedido pagado con tarjeta que se cancela debe devolver el cobro.
+        // provider decide con qué API reembolsar: 'stripe' cubre pedidos
+        // pagados antes de este cambio (Mercado Pago reemplazó a Stripe para
+        // pedidos nuevos, pero los viejos ya cobrados por Stripe siguen
+        // necesitando poder reembolsarse). Los pedidos en efectivo nunca
+        // pasaron por ninguna pasarela, no hay nada que reembolsar ahí.
         if (status === "cancelado" && order.status === "pagado") {
             const { rows: paymentRows } = await pool.query(
-                `SELECT stripe_session_id FROM payments WHERE order_id = $1 AND provider = 'stripe'`,
+                `SELECT provider, stripe_session_id, mercadopago_payment_id FROM payments WHERE order_id = $1`,
                 [req.params.id]
             );
-            const sessionId = paymentRows[0]?.stripe_session_id;
-            if (sessionId) {
+            const payment = paymentRows[0];
+            if (payment?.provider === "stripe" && payment.stripe_session_id) {
                 try {
-                    const session = await stripe.checkout.sessions.retrieve(sessionId);
+                    const session = await stripe.checkout.sessions.retrieve(payment.stripe_session_id);
                     if (session.payment_intent) {
                         await stripe.refunds.create({ payment_intent: session.payment_intent });
                     }
                 } catch (err) {
-                    console.error("orders.updateStatus: fallo el reembolso del pedido:", err.message);
+                    console.error("orders.updateStatus: fallo el reembolso del pedido (Stripe):", err.message);
+                }
+            } else if (payment?.provider === "mercadopago" && payment.mercadopago_payment_id) {
+                try {
+                    const { rows: storeRows } = await pool.query(
+                        `SELECT mercadopago_access_token FROM stores WHERE id = $1`,
+                        [order.store_id]
+                    );
+                    const encryptedToken = storeRows[0]?.mercadopago_access_token;
+                    if (encryptedToken) {
+                        await mercadopago.refundPayment({
+                            accessToken: decrypt(encryptedToken),
+                            paymentId: payment.mercadopago_payment_id,
+                        });
+                    }
+                } catch (err) {
+                    console.error("orders.updateStatus: fallo el reembolso del pedido (Mercado Pago):", err.message);
                 }
             }
         }
@@ -427,8 +468,9 @@ async function updateStatus(req, res) {
 
 module.exports = {
     checkout,
-    createCheckoutSession,
-    confirmStripeSession,
+    createMercadoPagoCheckoutSession,
+    confirmMercadoPagoPayment,
+    fulfillMercadoPagoPayment,
     handleStripeWebhook,
     listMine,
     listForStore,

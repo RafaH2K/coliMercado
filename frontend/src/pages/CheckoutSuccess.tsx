@@ -11,13 +11,17 @@ export default function CheckoutSuccess() {
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
-        const sessionId = params.get("session_id");
-        if (!sessionId) {
+        // Mercado Pago agrega estos parámetros solo al volver del pago (no
+        // los define el frontend, ver back_urls en
+        // orders.controller.js#createMercadoPagoCheckoutSession).
+        const paymentId = params.get("payment_id");
+        const externalReference = params.get("external_reference");
+        if (!paymentId || !externalReference) {
             setError("Falta la referencia del pago");
             return;
         }
         api
-            .post<Order[]>("/orders/confirm", { session_id: sessionId })
+            .post<Order[]>("/orders/mercadopago/confirm", { payment_id: paymentId, external_reference: externalReference })
             .then(setOrders)
             .catch((err) => setError(err instanceof ApiError ? err.message : "No se pudo confirmar el pago"));
     }, [params]);

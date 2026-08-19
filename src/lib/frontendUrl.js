@@ -13,4 +13,12 @@ function frontendUrl() {
         .replace(/\/$/, "");
 }
 
-module.exports = { frontendUrl };
+// URL pública del propio backend (ej. https://tu-backend.up.railway.app),
+// usada para el notification_url de las preferencias de Mercado Pago --
+// tiene que ser una URL real y alcanzable desde internet, MP la llama
+// server-to-server.
+function backendUrl() {
+    return (process.env.BACKEND_URL || "").trim().replace(/\/$/, "");
+}
+
+module.exports = { frontendUrl, backendUrl };

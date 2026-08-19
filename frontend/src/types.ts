@@ -121,6 +121,7 @@ export interface CartItem {
     stock: number;
     store_id: string;
     store_name: string;
+    mercadopago_connected: boolean;
     image_url: string | null;
 }
 
