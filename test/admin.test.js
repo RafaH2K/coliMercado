@@ -241,4 +241,49 @@ test("purgeStore: cancela la suscripción de Stripe activa del negocio", async (
     assert.equal(canceledId, "sub_test_purge");
 });
 
+test("purgeStore: si Stripe falla al cancelar la suscripción, no borra la tienda", async (t) => {
+    const ownerId = await createUser();
+    const storeId = await createStore(ownerId, { approved: true });
+    t.after(() => cleanup({ userId: ownerId, storeId }));
+    await pool.query(`UPDATE stores SET stripe_subscription_id = 'sub_test_purge_falla' WHERE id = $1`, [storeId]);
+
+    const originalCancel = stripe.subscriptions.cancel;
+    stripe.subscriptions.cancel = async () => {
+        throw new Error("Stripe no respondió");
+    };
+    t.after(() => {
+        stripe.subscriptions.cancel = originalCancel;
+    });
+
+    const res = mockRes();
+    await admin.purgeStore({ params: { id: storeId } }, res);
+
+    assert.equal(res.statusCode, 502);
+
+    const { rows } = await pool.query(`SELECT id FROM stores WHERE id = $1`, [storeId]);
+    assert.equal(rows.length, 1, "la tienda no debió borrarse si la cancelación en Stripe falló");
+});
+
+test("purgeStore: la suscripción ya cancelada en Stripe (resource_missing) no bloquea la purga", async (t) => {
+    const ownerId = await createUser();
+    const storeId = await createStore(ownerId, { approved: true });
+    t.after(() => cleanup({ userId: ownerId }));
+    await pool.query(`UPDATE stores SET stripe_subscription_id = 'sub_test_ya_cancelada' WHERE id = $1`, [storeId]);
+
+    const originalCancel = stripe.subscriptions.cancel;
+    stripe.subscriptions.cancel = async () => {
+        const err = new Error("No such subscription");
+        err.code = "resource_missing";
+        throw err;
+    };
+    t.after(() => {
+        stripe.subscriptions.cancel = originalCancel;
+    });
+
+    const res = mockRes();
+    await admin.purgeStore({ params: { id: storeId } }, res);
+
+    assert.equal(res.statusCode, 204);
+});
+
 after(() => pool.end());

@@ -129,6 +129,28 @@ async function purgeStore(req, res) {
         const store = storeRows[0];
         if (!store) return res.status(404).json({ error: "Negocio no encontrado" });
 
+        // Cancelar la suscripción de Stripe ANTES de borrar la tienda, no
+        // después: una vez que el DELETE hace commit, stripe_subscription_id
+        // desaparece de la base para siempre. Si Stripe falla aquí (timeout,
+        // blip de red), se aborta la purga sin tocar nada -- el admin puede
+        // reintentar -- en vez de dejar una suscripción cobrando sin ninguna
+        // fila que permita rastrearla o cancelarla después.
+        // resource_missing = la suscripción ya no existe en Stripe (el dueño
+        // ya la había cancelado, o un intento de purga anterior sí alcanzó a
+        // cancelarla pero falló después) -- no es un error real, se continúa.
+        if (store.stripe_subscription_id) {
+            try {
+                await stripe.subscriptions.cancel(store.stripe_subscription_id);
+            } catch (err) {
+                if (err.code !== "resource_missing") {
+                    console.error("admin.purgeStore: no se pudo cancelar la suscripción:", err.message);
+                    return res.status(502).json({
+                        error: "No se pudo cancelar la suscripción de Stripe de este negocio. Intenta de nuevo; la tienda no se borró.",
+                    });
+                }
+            }
+        }
+
         const { rows: imageRows } = await pool.query(
             `SELECT pi.url FROM product_images pi JOIN products p ON p.id = pi.product_id WHERE p.store_id = $1`,
             [storeId]
@@ -162,13 +184,6 @@ async function purgeStore(req, res) {
             client.release();
         }
 
-        if (store.stripe_subscription_id) {
-            try {
-                await stripe.subscriptions.cancel(store.stripe_subscription_id);
-            } catch (err) {
-                console.error("admin.purgeStore: no se pudo cancelar la suscripción:", err.message);
-            }
-        }
         imageUrls.forEach((url) => storage.deleteImage(url));
 
         res.status(204).send();
