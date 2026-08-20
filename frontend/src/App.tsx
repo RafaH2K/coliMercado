@@ -17,6 +17,8 @@ import CheckoutSuccess from "./pages/CheckoutSuccess";
 import MyOrders from "./pages/MyOrders";
 import Marketplace from "./pages/Marketplace";
 import Admin from "./pages/Admin";
+import MyAccount from "./pages/MyAccount";
+import LegalPage from "./components/LegalPage";
 
 export default function App() {
     return (
@@ -87,6 +89,17 @@ export default function App() {
                         </RequireAuth>
                     }
                 />
+                <Route
+                    path="/mi-cuenta"
+                    element={
+                        <RequireAuth>
+                            <MyAccount />
+                        </RequireAuth>
+                    }
+                />
+                <Route path="/terminos" element={<LegalPage title="Términos de servicio" />} />
+                <Route path="/privacidad" element={<LegalPage title="Aviso de privacidad" />} />
+                <Route path="/cookies" element={<LegalPage title="Política de cookies" />} />
             </Route>
         </Routes>
     );

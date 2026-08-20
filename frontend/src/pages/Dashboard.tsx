@@ -4,6 +4,7 @@ import { api, ApiError, imageUrl } from "../lib/api";
 import { formatDateTime, formatTime, orderFolio } from "../lib/format";
 import { COUNTRIES, joinPhone, splitPhone } from "../lib/countries";
 import ChatPanel from "../components/ChatPanel";
+import ImageRightsCheckbox from "../components/ImageRightsCheckbox";
 import type {
     Appointment,
     BlockedSlot,
@@ -156,6 +157,7 @@ function StorePanel({ store: initialStore }: { store: Store }) {
     const [savingPhone, setSavingPhone] = useState(false);
     const fileInput = useRef<HTMLInputElement>(null);
     const [uploading, setUploading] = useState(false);
+    const [logoRightsAttested, setLogoRightsAttested] = useState(false);
     const [plans, setPlans] = useState<Plan[] | null>(null);
 
     useEffect(() => {
@@ -170,6 +172,7 @@ function StorePanel({ store: initialStore }: { store: Store }) {
         try {
             const formData = new FormData();
             formData.append("logo", file);
+            formData.append("rights_attested", String(logoRightsAttested));
             const updated = await api.upload<Store>(`/stores/${store.id}/logo`, formData);
             setStore(updated);
         } catch {
@@ -207,7 +210,14 @@ function StorePanel({ store: initialStore }: { store: Store }) {
             <p className="muted">Zona horaria: {store.timezone}</p>
             <label className="field">
                 Logo del negocio
-                <input ref={fileInput} type="file" accept="image/*" onChange={handleLogoChange} disabled={uploading} />
+                <ImageRightsCheckbox checked={logoRightsAttested} onChange={setLogoRightsAttested} />
+                <input
+                    ref={fileInput}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleLogoChange}
+                    disabled={uploading || !logoRightsAttested}
+                />
             </label>
             <label className="field">
                 Teléfono / WhatsApp
@@ -974,6 +984,7 @@ function ServiceRow({
 }) {
     const fileInput = useRef<HTMLInputElement>(null);
     const [uploading, setUploading] = useState(false);
+    const [rightsAttested, setRightsAttested] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [editing, setEditing] = useState(false);
     const [saving, setSaving] = useState(false);
@@ -996,6 +1007,7 @@ function ServiceRow({
         try {
             const formData = new FormData();
             formData.append("image", file);
+            formData.append("rights_attested", String(rightsAttested));
             await api.upload(`/services/${service.id}/images`, formData);
             onChanged();
         } catch (err) {
@@ -1127,7 +1139,14 @@ function ServiceRow({
                     </div>
                 ))}
             </div>
-            <input ref={fileInput} type="file" accept="image/*" onChange={handleFileChange} disabled={uploading} />
+            <ImageRightsCheckbox checked={rightsAttested} onChange={setRightsAttested} />
+            <input
+                ref={fileInput}
+                type="file"
+                accept="image/*"
+                onChange={handleFileChange}
+                disabled={uploading || !rightsAttested}
+            />
             {error && <p className="error">{error}</p>}
         </div>
     );
@@ -1280,6 +1299,7 @@ function ProductRow({
 }) {
     const fileInput = useRef<HTMLInputElement>(null);
     const [uploading, setUploading] = useState(false);
+    const [rightsAttested, setRightsAttested] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [editing, setEditing] = useState(false);
     const [saving, setSaving] = useState(false);
@@ -1299,6 +1319,7 @@ function ProductRow({
         try {
             const formData = new FormData();
             formData.append("image", file);
+            formData.append("rights_attested", String(rightsAttested));
             await api.upload(`/products/${product.id}/images`, formData);
             onChanged();
         } catch (err) {
@@ -1399,7 +1420,14 @@ function ProductRow({
                     </div>
                 ))}
             </div>
-            <input ref={fileInput} type="file" accept="image/*" onChange={handleFileChange} disabled={uploading} />
+            <ImageRightsCheckbox checked={rightsAttested} onChange={setRightsAttested} />
+            <input
+                ref={fileInput}
+                type="file"
+                accept="image/*"
+                onChange={handleFileChange}
+                disabled={uploading || !rightsAttested}
+            />
             {error && <p className="error">{error}</p>}
         </div>
     );

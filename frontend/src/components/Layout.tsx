@@ -1,6 +1,7 @@
 import { Link, Outlet, useNavigate } from "react-router-dom";
 import { CalendarBlank, Storefront, ShoppingCartSimple, SignOut } from "@phosphor-icons/react";
 import { useAuth } from "../lib/auth";
+import Footer from "./Footer";
 
 export default function Layout() {
     const { user, logout } = useAuth();
@@ -42,7 +43,9 @@ export default function Layout() {
                     {user?.is_admin && <Link to="/admin">Admin</Link>}
                     {user ? (
                         <>
-                            <span className="nav-user">{user.email}</span>
+                            <Link to="/mi-cuenta" className="nav-user">
+                                {user.email}
+                            </Link>
                             <button className="btn btn-ghost btn-sm" onClick={handleLogout}>
                                 <SignOut size={14} /> Salir
                             </button>
@@ -60,6 +63,7 @@ export default function Layout() {
             <main className="container">
                 <Outlet />
             </main>
+            <Footer />
         </div>
     );
 }
