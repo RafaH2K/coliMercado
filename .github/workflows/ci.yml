@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: colimamerrcado_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      # comandos.sql ya trae las migraciones 001 y 002 fusionadas (plans,
+      # messages) -- correrlas de nuevo aquí chocaría con CREATE TABLE. El
+      # resto de migraciones se aplica encima en orden. Si agregas una
+      # migración nueva, súmala a esta lista.
+      - name: Preparar el esquema de la base de datos
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d colimamerrcado_test -v ON_ERROR_STOP=1 -f sql/comandos.sql
+          for f in sql/migrations/003_plan_billing.sql \
+                   sql/migrations/004_appointment_deposits.sql \
+                   sql/migrations/005_mercadopago_connect.sql \
+                   sql/migrations/006_missing_indexes.sql \
+                   sql/migrations/007_mercadopago_payments.sql; do
+            psql -h localhost -U postgres -d colimamerrcado_test -v ON_ERROR_STOP=1 -f "$f"
+          done
+
+      - name: Correr la suite de tests
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/colimamerrcado_test
+          JWT_SECRET: ci-test-jwt-secret
+          CORS_ORIGIN: http://localhost:5173
+          FRONTEND_URL: http://localhost:5173
+          BACKEND_URL: http://localhost:3000
+          STRIPE_SECRET_KEY: sk_test_ci_placeholder
+          STRIPE_WEBHOOK_SECRET: whsec_ci_placeholder
+          RESEND_API_KEY: re_ci_placeholder
+          SUPABASE_URL: https://ci-placeholder.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: ci-placeholder
+          SUPABASE_BUCKET: uploads
+          MERCADOPAGO_CLIENT_ID: ci-test-client-id
+          MERCADOPAGO_CLIENT_SECRET: ci-test-client-secret
+          MERCADOPAGO_REDIRECT_URI: http://localhost:3000/api/mercadopago/callback
+          MERCADOPAGO_TOKEN_KEY: wYPUHBv/t+DhqgeE4hA56nK4/ELXGHJ8aw21p5J8LcY=
+          MERCADOPAGO_ACCESS_TOKEN: ci-test-access-token
+          MERCADOPAGO_WEBHOOK_SECRET: ci-test-webhook-secret
+        run: npm test
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Instalar dependencias
+        working-directory: frontend
+        run: npm ci
+
+      - name: Typecheck y build (tsc -b && vite build)
+        working-directory: frontend
+        env:
+          VITE_API_URL: http://localhost:3000/api
+        run: npm run build
