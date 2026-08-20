@@ -3,6 +3,7 @@ const stripe = require("../config/stripe");
 const { isValidTimeZone } = require("../lib/timezone");
 const storage = require("../lib/storage");
 const { trimToLimit } = require("../middlewares/planLimit");
+const { recordAttestation } = require("../lib/imageAttestation");
 
 async function create(req, res) {
     const { name, description, logo_url, timezone, city, phone } = req.body;
@@ -230,6 +231,11 @@ async function uploadLogo(req, res) {
         ]);
         const oldUrl = prevRows[0]?.logo_url;
         if (oldUrl) storage.deleteImage(oldUrl);
+        try {
+            await recordAttestation({ userId: req.user.id, url, kind: "logo" });
+        } catch (err) {
+            console.error("stores.uploadLogo: fallo guardando la atestación de derechos:", err.message);
+        }
         res.json(rows[0]);
     } catch (err) {
         console.error("stores.uploadLogo error:", err.message);

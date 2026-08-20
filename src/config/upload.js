@@ -31,12 +31,21 @@ const upload = multer({
 // multer reporta errores (tamaño, mimetype) vía callback, no como excepción
 // normal de Express — sin esto, un archivo inválido tumba la request sin
 // respuesta JSON clara.
+// rights_attested="true" es obligatorio en todo upload de imagen: quien sube
+// confirma tener los derechos o autorización para usarla (ver
+// src/lib/imageAttestation.js, que deja el registro auditable). multer mete
+// los campos que no son archivo en req.body como texto, nunca boolean real.
 function handleUpload(fieldName) {
     const middleware = upload.single(fieldName);
     return (req, res, next) => {
         middleware(req, res, (err) => {
             if (err) return res.status(400).json({ error: err.message });
             if (!req.file) return res.status(400).json({ error: `Falta el archivo '${fieldName}'` });
+            if (req.body.rights_attested !== "true") {
+                return res
+                    .status(400)
+                    .json({ error: "Debes confirmar que tienes los derechos o autorización para usar esta imagen" });
+            }
             next();
         });
     };

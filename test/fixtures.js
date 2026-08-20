@@ -51,6 +51,7 @@ async function cleanup({ userId, storeId, productId } = {}) {
         await pool.query(`DELETE FROM orders WHERE user_id = ANY($1)`, [userIds]);
         await pool.query(`DELETE FROM cart_items WHERE user_id = ANY($1)`, [userIds]);
         await pool.query(`DELETE FROM appointments WHERE customer_id = ANY($1)`, [userIds]);
+        await pool.query(`DELETE FROM image_upload_attestations WHERE user_id = ANY($1)`, [userIds]);
     }
     if (productIds.length) {
         await pool.query(`DELETE FROM appointments WHERE product_id = ANY($1)`, [productIds]);

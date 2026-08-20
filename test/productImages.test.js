@@ -24,7 +24,7 @@ test("add: agrega una imagen con position 0 cuando no hay ninguna", async (t) =>
     fakeUpload(t, "foto1.jpg");
 
     const res = mockRes();
-    await productImages.add({ params: { id: productId }, file: {} }, res);
+    await productImages.add({ params: { id: productId }, file: {}, user: { id: ownerId } }, res);
 
     assert.equal(res.statusCode, 201);
     assert.equal(res.body.url, "/uploads/foto1.jpg");
@@ -38,9 +38,9 @@ test("add: la siguiente imagen toma la posición siguiente (MAX(position)+1)", a
     t.after(() => cleanup({ userId: ownerId, storeId, productId }));
     fakeUpload(t, "foto1.jpg");
 
-    await productImages.add({ params: { id: productId }, file: {} }, mockRes());
+    await productImages.add({ params: { id: productId }, file: {}, user: { id: ownerId } }, mockRes());
     const res = mockRes();
-    await productImages.add({ params: { id: productId }, file: {} }, res);
+    await productImages.add({ params: { id: productId }, file: {}, user: { id: ownerId } }, res);
 
     assert.equal(res.body.position, 1);
 });
@@ -53,7 +53,7 @@ test("remove: borra una imagen existente", async (t) => {
     fakeUpload(t, "foto1.jpg");
 
     const added = mockRes();
-    await productImages.add({ params: { id: productId }, file: {} }, added);
+    await productImages.add({ params: { id: productId }, file: {}, user: { id: ownerId } }, added);
 
     const res = mockRes();
     await productImages.remove({ params: { id: productId, imageId: added.body.id } }, res);
@@ -87,7 +87,7 @@ test("remove: no borra una imagen de OTRO producto aunque el id de la imagen exi
     fakeUpload(t, "foto1.jpg");
 
     const added = mockRes();
-    await productImages.add({ params: { id: productId }, file: {} }, added);
+    await productImages.add({ params: { id: productId }, file: {}, user: { id: ownerId } }, added);
 
     const res = mockRes();
     await productImages.remove({ params: { id: otherProductId, imageId: added.body.id } }, res);

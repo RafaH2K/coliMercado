@@ -114,6 +114,73 @@ async function forgotPassword(req, res) {
     }
 }
 
+// Autoborrado de cuenta (pendiente confirmar con un abogado que esto cumpla
+// lo que exige la ley aplicable -- esto es una implementación técnica
+// razonable, no asesoría legal). Anonimiza en vez de borrar la fila: orders,
+// appointments, cart_items y messages referencian users.id como NOT NULL sin
+// ON DELETE CASCADE -- borrar la fila de verdad rompería esas referencias o
+// se llevaría entre pies el historial que un negocio necesita conservar (ver
+// migración 008). Un dueño de negocio o un admin no pueden autoborrarse: las
+// consecuencias (negocio completo, único acceso admin) son demasiado grandes
+// para un clic de self-service sin más fricción.
+async function deleteAccount(req, res) {
+    try {
+        const { rows: userRows } = await pool.query(
+            `SELECT is_admin FROM users WHERE id = $1 AND deleted_at IS NULL`,
+            [req.user.id]
+        );
+        const user = userRows[0];
+        if (!user) return res.status(404).json({ error: "Cuenta no encontrada" });
+        if (user.is_admin) {
+            return res
+                .status(409)
+                .json({ error: "Tu cuenta tiene permisos de administrador. Contáctanos para gestionar el borrado." });
+        }
+
+        const { rows: storeRows } = await pool.query(`SELECT id FROM stores WHERE owner_id = $1 LIMIT 1`, [
+            req.user.id,
+        ]);
+        if (storeRows[0]) {
+            return res.status(409).json({
+                error: "Tienes un negocio activo. Contáctanos para gestionar el cierre de tu negocio antes de borrar tu cuenta.",
+            });
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            await client.query(`DELETE FROM cart_items WHERE user_id = $1`, [req.user.id]);
+            await client.query(`DELETE FROM favorites WHERE user_id = $1`, [req.user.id]);
+            // password_hash inservible (nadie conoce este UUID al azar) +
+            // email desconocido para el usuario = no puede volver a entrar.
+            const unusableHash = await bcrypt.hash(crypto.randomUUID(), SALT_ROUNDS);
+            await client.query(
+                `UPDATE users SET
+                    name = NULL,
+                    email = $1,
+                    phone = NULL,
+                    password_hash = $2,
+                    reset_token_hash = NULL,
+                    reset_token_expires = NULL,
+                    deleted_at = NOW()
+                 WHERE id = $3`,
+                [`eliminado-${req.user.id}@eliminado.local`, unusableHash, req.user.id]
+            );
+            await client.query("COMMIT");
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
+
+        res.status(204).send();
+    } catch (err) {
+        console.error("deleteAccount error:", err.message);
+        res.status(500).json({ error: "Error interno del servidor" });
+    }
+}
+
 async function resetPassword(req, res) {
     const { token, password } = req.body;
     if (!token || !password) {
@@ -143,4 +210,4 @@ async function resetPassword(req, res) {
     }
 }
 
-module.exports = { register, login, forgotPassword, resetPassword };
+module.exports = { register, login, forgotPassword, resetPassword, deleteAccount };

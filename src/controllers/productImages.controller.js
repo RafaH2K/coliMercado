@@ -1,5 +1,6 @@
 const pool = require("../config/db");
 const storage = require("../lib/storage");
+const { recordAttestation } = require("../lib/imageAttestation");
 
 async function add(req, res) {
     try {
@@ -12,6 +13,14 @@ async function add(req, res) {
             `INSERT INTO product_images (product_id, url, position) VALUES ($1, $2, $3) RETURNING *`,
             [req.params.id, url, posRows[0].next]
         );
+        // Se espera pero no puede tumbar la respuesta: la imagen ya se subió
+        // de verdad, fallar aquí solo perdería el registro de auditoría, no
+        // el upload -- eso solo se loggea.
+        try {
+            await recordAttestation({ userId: req.user.id, url, kind: "product_image" });
+        } catch (err) {
+            console.error("productImages.add: fallo guardando la atestación de derechos:", err.message);
+        }
         res.status(201).json(rows[0]);
     } catch (err) {
         console.error("productImages.add error:", err.message);
