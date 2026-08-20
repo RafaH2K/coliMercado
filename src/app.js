@@ -1,3 +1,7 @@
+// Debe requerirse antes que el resto (recomendación de Sentry) -- sin esto
+// instrumenta menos de lo que podría, aunque acá lo que de verdad importa es
+// el wrap de console.error que hace este módulo al cargarse.
+const { Sentry, enabled: sentryEnabled } = require("./config/sentry");
 const express = require("express");
 const morgan = require("morgan");
 const cors = require("cors");
@@ -83,6 +87,13 @@ app.use("/api/mercadopago", mercadopagoRoutes);
 app.get("/", (req, res) => {
     res.send("server responde hola");
 });
+
+// Captura lo que sí llegue a tronar sin ser atrapado localmente (bugs fuera
+// de un try/catch) -- debe ir después de las rutas y antes del manejador de
+// errores propio de abajo, que sigue siendo el que arma la respuesta final.
+if (sentryEnabled) {
+    Sentry.setupExpressErrorHandler(app);
+}
 
 // Sin esto, un origen rechazado por cors() cae al manejador de errores por
 // default de Express: un 500 en HTML, indistinguible de una falla real del
