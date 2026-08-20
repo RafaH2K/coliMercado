@@ -40,6 +40,7 @@ test("connect: arma la URL de autorización con un state firmado que decodifica 
     assert.equal(url.searchParams.get("client_id"), process.env.MERCADOPAGO_CLIENT_ID);
     assert.equal(url.searchParams.get("response_type"), "code");
     assert.equal(url.searchParams.get("platform_id"), "mp");
+    assert.equal(url.searchParams.get("scope"), "offline_access", "sin esto el refresh_token no sirve después");
     assert.equal(url.searchParams.get("redirect_uri"), process.env.MERCADOPAGO_REDIRECT_URI);
 
     const decoded = jwt.verify(url.searchParams.get("state"), process.env.JWT_SECRET);

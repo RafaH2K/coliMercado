@@ -55,6 +55,30 @@ async function refundPayment({ accessToken, paymentId }) {
     return request(`/v1/payments/${paymentId}/refunds`, { accessToken, method: "POST" });
 }
 
+// Renueva un access_token por vencer usando su refresh_token. Requiere que
+// el permiso original se haya pedido con scope=offline_access (ver
+// mercadopago.controller.js#connect) -- sin eso, Mercado Pago rechaza esta
+// llamada aunque haya guardado un refresh_token. MP rota el refresh_token
+// en cada renovación: el que devuelve esta llamada hay que volver a
+// guardarlo, el anterior deja de servir.
+async function refreshAccessToken({ clientId, clientSecret, refreshToken }) {
+    const res = await fetch(`${API_BASE}/oauth/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            client_id: clientId,
+            client_secret: clientSecret,
+            grant_type: "refresh_token",
+            refresh_token: refreshToken,
+        }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+        throw new MercadoPagoError(data?.message || `Mercado Pago respondió ${res.status}`, res.status);
+    }
+    return data;
+}
+
 // Firma HMAC-SHA256 de los webhooks: manifest "id:{dataId};request-id:{requestId};ts:{ts};"
 // (dataId siempre en minúsculas). x-signature llega como "ts=...,v1=...".
 // https://www.mercadopago.com.mx/developers/en/docs/checkout-api/additional-content/your-integrations/notifications/webhooks
@@ -77,4 +101,11 @@ function verifyWebhookSignature({ xSignature, xRequestId, dataId, secret }) {
     return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-module.exports = { MercadoPagoError, createPreference, getPayment, refundPayment, verifyWebhookSignature };
+module.exports = {
+    MercadoPagoError,
+    createPreference,
+    getPayment,
+    refundPayment,
+    refreshAccessToken,
+    verifyWebhookSignature,
+};

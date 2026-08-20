@@ -18,9 +18,14 @@ async function connect(req, res) {
         return res.status(500).json({ error: "Mercado Pago no está configurado en el servidor" });
     }
     const state = jwt.sign({ storeId: req.store.id }, process.env.JWT_SECRET, { expiresIn: "10m" });
+    // scope=offline_access: sin esto Mercado Pago no deja usar el
+    // refresh_token después (ver src/jobs/mercadopagoTokenRefresh.js) aunque
+    // sí lo devuelva en el intercambio inicial -- el access_token vence a
+    // los 180 días y sin poder renovarlo el negocio tendría que reconectar
+    // manualmente cada vez.
     const url =
         `${AUTH_URL}?client_id=${encodeURIComponent(process.env.MERCADOPAGO_CLIENT_ID)}` +
-        `&response_type=code&platform_id=mp&state=${encodeURIComponent(state)}` +
+        `&response_type=code&platform_id=mp&scope=offline_access&state=${encodeURIComponent(state)}` +
         `&redirect_uri=${encodeURIComponent(process.env.MERCADOPAGO_REDIRECT_URI)}`;
     res.json({ url });
 }
